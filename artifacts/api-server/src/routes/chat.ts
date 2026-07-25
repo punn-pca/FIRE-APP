@@ -4,9 +4,14 @@ import { logger } from "../lib/logger";
 
 const router: Router = Router();
 
-const openai = new OpenAI({
-  apiKey: process.env["OPENAI_API_KEY"],
-});
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    // Let SDK auto-read OPENAI_API_KEY from environment
+    _openai = new OpenAI();
+  }
+  return _openai;
+}
 
 const SYSTEM_PROMPT = `คุณคือ FIRE KEEPER ระบบประมวลผลปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) ที่ถูกออกแบบมาเพื่อให้คำแนะนำเชิงยุทธศาสตร์อย่างเป็นระบบ
 
@@ -61,7 +66,7 @@ router.post("/", async (req, res) => {
       })),
     ];
 
-    const stream = await openai.chat.completions.create({
+    const stream = await getOpenAI().chat.completions.create({
       model: "gpt-4o",
       messages: chatMessages,
       stream: true,
