@@ -39,7 +39,7 @@ interface PCAState {
   learning: string[];
   agency_checks: string[];
   notes: string[];
-  confidence: number;
+  confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   trace: TraceEntry[];
   llm_provider: string;
   llm_model: string;
@@ -154,11 +154,11 @@ function stageHypotheses(state: PCAState) {
 function stageEvidenceEvaluation(state: PCAState) {
   state.evidence = [
     state.language === "th"
-      ? "หลักฐานเชิงประจักษ์จากข้อมูลที่ผู้ใช้ระบุมาในคำถาม (Confidence: ปานกลาง)"
-      : "Empirical evidence from user-provided input (Confidence: Medium)",
+      ? "หลักฐานเชิงประจักษ์จากข้อมูลที่ผู้ใช้ระบุมาในคำถาม"
+      : "Empirical evidence from user-provided input",
     state.language === "th"
-      ? "หลักฐานอ้างอิงจากฐานความรู้และมาตรฐานสากลที่เกี่ยวข้อง (Confidence: สูง)"
-      : "Evidence from established knowledge base and international standards (Confidence: High)",
+      ? "หลักฐานอ้างอิงจากฐานความรู้และมาตรฐานสากลที่เกี่ยวข้อง"
+      : "Evidence from established knowledge base and international standards",
   ];
   record(state, "EVIDENCE_EVALUATION", { evidence: state.evidence });
 }
@@ -183,9 +183,15 @@ function stageCritique(state: PCAState) {
 function stageDecision(state: PCAState) {
   state.decision =
     state.language === "th"
-      ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและระดับความมั่นใจ"
-      : "Present strategic conclusions distinguishing facts from interpretations, with explicit confidence levels.";
-  state.confidence = 0.72;
+      ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและข้อจำกัด"
+      : "Present strategic conclusions distinguishing facts from interpretations, with explicit scope and limitations.";
+  // Qualitative confidence: determined by critique + uncertainty from earlier stages
+  const highUncertainty = state.uncertainty.some((u) =>
+    /สูง|high/i.test(u)
+  );
+  const lowEvidence = state.evidence.length < 2;
+  state.confidence =
+    highUncertainty || lowEvidence ? "ต่ำ" : state.constraints.length > 2 ? "ปานกลาง" : "ปานกลาง";
   record(state, "DECISION", { decision: state.decision, confidence: state.confidence });
 }
 
@@ -246,16 +252,12 @@ function buildSystemPrompt(state: PCAState, tone: string, deepReasoning: boolean
     ? `\nUser Personal Context: ${personalContext}`
     : "";
 
-  const confidence = Math.round(state.confidence * 100);
-
   if (deepReasoning) {
     return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
 
 ${toneInstruction}
 ${memoryContext}
 ${personalCtx}
-
-Confidence Calibration: ${confidence}% (ปรับตามน้ำหนักหลักฐาน)
 
 คุณต้องวิเคราะห์เชิงลึกเต็มรูปแบบ โดยใช้กรอบ FIRE:
 - **F**act: ข้อเท็จจริงเชิงประจักษ์
@@ -296,8 +298,6 @@ Confidence Calibration: ${confidence}% (ปรับตามน้ำหนั�
 ${toneInstruction}
 ${memoryContext}
 ${personalCtx}
-
-Confidence Calibration: ${confidence}% (ปรับตามน้ำหนักหลักฐาน)
 
 กรอบการวิเคราะห์ PUNN FIRE:
 - Fact First: แยกข้อเท็จจริงออกจากความคิดเห็น
@@ -369,7 +369,7 @@ router.post("/", async (req, res) => {
     learning: [],
     agency_checks: [],
     notes: [],
-    confidence: 0.72,
+    confidence: "ปานกลาง",
     trace: [],
     llm_provider: "openai",
     llm_model: "gpt-4o",

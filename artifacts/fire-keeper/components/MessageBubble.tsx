@@ -19,7 +19,7 @@ export interface PCAState {
   understanding: string;
   purpose: string;
   decision: string;
-  confidence: number;
+  confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   critique: string[];
   reflection: string[];
   learning: string[];
@@ -147,8 +147,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     let content = `=== FIRE KEEPER — PUNN PCA Analysis ===\nวันที่: ${timestamp}\n\n`;
 
     if (message.pcaState) {
-      const pct = Math.round(message.pcaState.confidence * 100);
-      content += `ระดับความมั่นใจ: ${pct}%\n`;
+      content += `ระดับความมั่นใจ (ประมาณการเชิงคุณภาพ): ${message.pcaState.confidence}\n`;
       content += `โมเดล: ${message.pcaState.llm_provider ?? 'openai'} (${message.pcaState.llm_model ?? 'gpt-4o'})\n`;
       if (message.pcaState.execution_time_ms) {
         content += `เวลาประมวลผล: ${(message.pcaState.execution_time_ms / 1000).toFixed(2)}s\n`;
@@ -269,8 +268,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               <Text style={styles.pcaToggleText}>
                 {showPCA ? '▲ ซ่อนข้อมูล PCA' : '▼ แสดงข้อมูล PCA'}
               </Text>
-              <Text style={styles.pcaConfidence}>
-                ความมั่นใจ {Math.round(message.pcaState.confidence * 100)}%
+              <Text style={[
+                styles.pcaConfidence,
+                message.pcaState.confidence === 'สูง' && { color: '#22c55e' },
+                message.pcaState.confidence === 'ต่ำ' && { color: '#f97316' },
+                message.pcaState.confidence === 'ไม่สามารถประเมินได้' && { color: '#94a3b8' },
+              ]}>
+                ความมั่นใจ: {message.pcaState.confidence}
               </Text>
             </Pressable>
           )}
