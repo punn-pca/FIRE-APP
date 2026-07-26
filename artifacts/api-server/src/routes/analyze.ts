@@ -6,10 +6,7 @@ const router: Router = Router();
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
-  if (!_openai) {
-    // Let SDK auto-read OPENAI_API_KEY from environment
-    _openai = new OpenAI();
-  }
+  if (!_openai) _openai = new OpenAI();
   return _openai;
 }
 
@@ -21,7 +18,12 @@ interface TraceEntry {
   output: Record<string, unknown>;
 }
 
-interface PCAState {
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface PCAState {
   user_input: string;
   language: "th" | "en";
   observations: string[];
@@ -40,6 +42,8 @@ interface PCAState {
   agency_checks: string[];
   notes: string[];
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
+  conflicts: string[];
+  missing_info: string[];
   trace: TraceEntry[];
   llm_provider: string;
   llm_model: string;
@@ -51,12 +55,137 @@ interface PCAState {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const THAI_REGEX = /[\u0E00-\u0E7F]/;
-function detectLanguage(text: string): "th" | "en" {
+export function detectLanguage(text: string): "th" | "en" {
   return THAI_REGEX.test(text) ? "th" : "en";
 }
 
 function record(state: PCAState, stage: string, output: Record<string, unknown>) {
   state.trace.push({ stage, timestamp: new Date().toISOString(), output });
+}
+
+// ─── 2. Working Memory: compact history summary ───────────────────────────────
+
+export function buildWorkingMemory(history: ConversationTurn[], lang: "th" | "en"): string {
+  if (history.length === 0) return "";
+  // Take last 8 turns (4 exchanges), truncate each to 300 chars to stay concise
+  return history
+    .slice(-8)
+    .map((t) => {
+      const role = t.role === "user"
+        ? (lang === "th" ? "ผู้ใช้" : "User")
+        : "FIRE KEEPER";
+      return `${role}: ${t.content.slice(0, 300)}${t.content.length > 300 ? "…" : ""}`;
+    })
+    .join("\n---\n");
+}
+
+// ─── 3. Context Validation ────────────────────────────────────────────────────
+
+export interface ContextValidation {
+  richness: "rich" | "moderate" | "thin";
+  missingSignals: string[];
+}
+
+export function validateContext(
+  question: string,
+  history: ConversationTurn[]
+): ContextValidation {
+  const q = question.trim();
+  // Thai doesn't separate words with spaces consistently — use character count
+  const charCount = q.length;
+  const wordCount = q.split(/\s+/).filter(Boolean).length;
+  const hasHistory = history.length > 0;
+  const hasSpecifics = /\d|ชื่อ|วันที่|จำนวน|ราคา|how|when|where|who|why|what|\?/i.test(q);
+
+  const missingSignals: string[] = [];
+
+  // "Short" = both char count AND word count are small (avoids false positives on Thai)
+  if (charCount < 15 && wordCount < 4 && !hasHistory) {
+    missingSignals.push("คำถามสั้นมาก — ต้องการบริบทเพิ่มเติม");
+  }
+  if (!hasSpecifics && charCount < 35 && !hasHistory) {
+    missingSignals.push("ขาดรายละเอียดเฉพาะเจาะจง (เหตุการณ์, เงื่อนไข, ตัวเลข)");
+  }
+
+  // Use char count as the primary richness signal for Thai/mixed text
+  const richness: ContextValidation["richness"] =
+    charCount >= 55 || (hasHistory && charCount >= 12)
+      ? "rich"
+      : charCount >= 20 || hasHistory
+      ? "moderate"
+      : "thin";
+
+  return { richness, missingSignals };
+}
+
+// ─── 6. Conflict Detection ────────────────────────────────────────────────────
+
+export function detectConflicts(question: string, history: ConversationTurn[]): string[] {
+  const prevAssistant = history.filter((h) => h.role === "assistant").slice(-3);
+  if (prevAssistant.length === 0) return [];
+
+  const conflicts: string[] = [];
+  const reversalPatterns = [
+    { a: /แนะนำ|ควร(?!จะ)|เหมาะสม/i, b: /ไม่แนะนำ|ไม่ควร|ไม่เหมาะสม/i },
+    { a: /ปลอดภัย|เชื่อถือได้/i, b: /ไม่ปลอดภัย|เชื่อถือไม่ได้/i },
+    { a: /ดีกว่า|เหนือกว่า/i, b: /แย่กว่า|ด้อยกว่า/i },
+  ];
+
+  for (const prev of prevAssistant) {
+    for (const { a, b } of reversalPatterns) {
+      const prevSaysA = a.test(prev.content) && !b.test(prev.content);
+      const questionSaysB = b.test(question);
+      const prevSaysB = b.test(prev.content) && !a.test(prev.content);
+      const questionSaysA = a.test(question);
+      if ((prevSaysA && questionSaysB) || (prevSaysB && questionSaysA)) {
+        conflicts.push(
+          "ตรวจพบแนวโน้มขัดแย้งกับการวิเคราะห์ก่อนหน้า — กำลังตรวจสอบความสอดคล้อง"
+        );
+        break;
+      }
+    }
+  }
+  return [...new Set(conflicts)];
+}
+
+// ─── 8. Evidence-based Confidence ────────────────────────────────────────────
+
+export function calculateConfidence(
+  question: string,
+  history: ConversationTurn[],
+  memories: PCAState["memories"],
+  context: ContextValidation,
+  conflicts: string[]
+): PCAState["confidence"] {
+  let score = 0;
+
+  // Input richness — use char count (Thai doesn't split cleanly by whitespace)
+  const charCount = question.trim().length;
+  if (charCount >= 55) score += 2;
+  else if (charCount >= 20) score += 1;
+
+  // Conversation depth — more history = more context available
+  if (history.length >= 6) score += 2;
+  else if (history.length >= 2) score += 1;
+
+  // Long-term memory items
+  if (memories.length >= 3) score += 1;
+  else if (memories.length >= 1) score += 0.5;
+
+  // Context richness
+  if (context.richness === "rich") score += 1;
+  else if (context.richness === "thin") score -= 2;
+
+  // Penalise for missing signals
+  score -= context.missingSignals.length;
+
+  // Penalise for detected conflicts (uncertain which answer is correct)
+  score -= conflicts.length;
+
+  if (score >= 4) return "สูง";
+  if (score >= 2) return "ปานกลาง";
+  if (score >= 0) return "ต่ำ";
+  return "ไม่สามารถประเมินได้";
 }
 
 // ─── Cognitive Stages ─────────────────────────────────────────────────────────
@@ -151,7 +280,7 @@ function stageHypotheses(state: PCAState) {
   record(state, "HYPOTHESIS", { hypotheses: state.hypotheses });
 }
 
-function stageEvidenceEvaluation(state: PCAState) {
+function stageEvidenceEvaluation(state: PCAState, history: ConversationTurn[]) {
   state.evidence = [
     state.language === "th"
       ? "หลักฐานเชิงประจักษ์จากข้อมูลที่ผู้ใช้ระบุมาในคำถาม"
@@ -160,10 +289,17 @@ function stageEvidenceEvaluation(state: PCAState) {
       ? "หลักฐานอ้างอิงจากฐานความรู้และมาตรฐานสากลที่เกี่ยวข้อง"
       : "Evidence from established knowledge base and international standards",
   ];
-  record(state, "EVIDENCE_EVALUATION", { evidence: state.evidence });
+  if (history.length > 0) {
+    state.evidence.push(
+      state.language === "th"
+        ? `บริบทจากประวัติการสนทนา (${history.length} รายการ)`
+        : `Context from conversation history (${history.length} turns)`
+    );
+  }
+  record(state, "EVIDENCE_EVALUATION", { evidence: state.evidence, history_turns: history.length });
 }
 
-function stageCritique(state: PCAState) {
+function stageCritique(state: PCAState, context: ContextValidation) {
   state.critique = [
     state.language === "th"
       ? "ข้อจำกัด: การวิเคราะห์นี้ตั้งอยู่บนข้อมูลที่ผู้ใช้ให้มา หากข้อมูลไม่ครบถ้วนอาจส่งผลต่อความแม่นยำ"
@@ -172,27 +308,52 @@ function stageCritique(state: PCAState) {
       ? "ความเสี่ยง: อาจมี Confirmation Bias ในการตีความข้อมูลที่นำเสนอ"
       : "Risk: Potential Confirmation Bias in interpreting the presented information.",
   ];
+
+  // 3. Context Validation — surface missing info as critique
+  state.missing_info = context.missingSignals;
+  if (context.missingSignals.length > 0) {
+    state.critique.push(
+      state.language === "th"
+        ? `ข้อมูลที่ขาด: ${context.missingSignals.join("; ")}`
+        : `Missing information: ${context.missingSignals.join("; ")}`
+    );
+  }
+
+  const uncertaintyLevel = context.richness === "thin" ? "สูง" : "ปานกลาง";
   state.uncertainty = [
     state.language === "th"
-      ? "ระดับความไม่แน่นอน: ปานกลาง — ขึ้นอยู่กับตัวแปรบริบทที่ยังไม่ได้รับการยืนยัน"
-      : "Uncertainty Level: Medium — depends on unconfirmed contextual variables.",
+      ? `ระดับความไม่แน่นอน: ${uncertaintyLevel} — ขึ้นอยู่กับตัวแปรบริบทที่ยังไม่ได้รับการยืนยัน`
+      : `Uncertainty Level: ${uncertaintyLevel === "สูง" ? "High" : "Medium"} — depends on unconfirmed contextual variables.`,
   ];
-  record(state, "CRITIQUE", { critique: state.critique, uncertainty: state.uncertainty });
+  record(state, "CRITIQUE", {
+    critique: state.critique,
+    uncertainty: state.uncertainty,
+    missing_info: state.missing_info,
+  });
 }
 
-function stageDecision(state: PCAState) {
+function stageDecision(
+  state: PCAState,
+  history: ConversationTurn[],
+  memories: PCAState["memories"],
+  context: ContextValidation,
+  conflicts: string[]
+) {
   state.decision =
     state.language === "th"
       ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและข้อจำกัด"
       : "Present strategic conclusions distinguishing facts from interpretations, with explicit scope and limitations.";
-  // Qualitative confidence: determined by critique + uncertainty from earlier stages
-  const highUncertainty = state.uncertainty.some((u) =>
-    /สูง|high/i.test(u)
-  );
-  const lowEvidence = state.evidence.length < 2;
-  state.confidence =
-    highUncertainty || lowEvidence ? "ต่ำ" : state.constraints.length > 2 ? "ปานกลาง" : "ปานกลาง";
-  record(state, "DECISION", { decision: state.decision, confidence: state.confidence });
+
+  // 8. Evidence-based confidence
+  state.confidence = calculateConfidence(state.user_input, history, memories, context, conflicts);
+  state.conflicts = conflicts;
+
+  record(state, "DECISION", {
+    decision: state.decision,
+    confidence: state.confidence,
+    conflicts,
+    context_richness: context.richness,
+  });
 }
 
 function stageReflection(state: PCAState) {
@@ -204,6 +365,13 @@ function stageReflection(state: PCAState) {
       ? "การตัดสินใจขั้นสุดท้ายอยู่กับผู้ใช้เสมอ (Human Agency Preserved)"
       : "Final decision authority remains with the human user (Human Agency Preserved).",
   ];
+  if (state.conflicts.length > 0) {
+    state.reflection.push(
+      state.language === "th"
+        ? "มีการตรวจสอบความสอดคล้องกับบทสนทนาก่อนหน้า"
+        : "Self-consistency check performed against prior conversation."
+    );
+  }
   record(state, "REFLECTION", { reflection: state.reflection });
 }
 
@@ -226,9 +394,15 @@ function stageLearning(state: PCAState) {
 
 // ─── Communication Prompt ─────────────────────────────────────────────────────
 
-function buildSystemPrompt(state: PCAState, tone: string, deepReasoning: boolean, personalContext: string): string {
-  const lang = state.language;
-
+function buildSystemPrompt(
+  state: PCAState,
+  tone: string,
+  deepReasoning: boolean,
+  personalContext: string,
+  workingMemory: string,
+  context: ContextValidation,
+  conflicts: string[]
+): string {
   let toneInstruction = "";
   if (tone === "Formal Architect") {
     toneInstruction =
@@ -241,23 +415,49 @@ function buildSystemPrompt(state: PCAState, tone: string, deepReasoning: boolean
       "TONE: Direct Expert — ตอบตรงประเด็น กระชับ ชัดเจน ระบุข้อเสนอโดยไม่อ้อมค้อม";
   }
 
-  const memoryContext =
+  // 1+2. Conversation history & working memory
+  const historySection = workingMemory
+    ? `\n── ประวัติการสนทนา (Working Memory) ──\n${workingMemory}\n──────────────────────────────────────`
+    : "";
+
+  // Long-term memory store
+  const memorySection =
     state.memories.length > 0
-      ? `\nMemory Context:\n${state.memories
-          .map((m, i) => `${i + 1}. [${m.layer}] ${m.content}`)
-          .join("\n")}`
+      ? `\nMemory Context:\n${state.memories.map((m, i) => `${i + 1}. [${m.layer}] ${m.content}`).join("\n")}`
       : "";
 
-  const personalCtx = personalContext
-    ? `\nUser Personal Context: ${personalContext}`
-    : "";
+  const personalCtx = personalContext ? `\nUser Personal Context: ${personalContext}` : "";
+
+  // 3. Context validation warning
+  const contextWarning =
+    context.missingSignals.length > 0
+      ? `\n⚠️ บริบทที่ได้รับ: ${context.richness === "thin" ? "น้อยมาก" : "ปานกลาง"}\nข้อมูลที่ขาด: ${context.missingSignals.join(", ")}`
+      : "";
+
+  // 6. Conflict flags
+  const conflictWarning =
+    conflicts.length > 0
+      ? `\n⚠️ ตรวจพบความขัดแย้งที่อาจเกิดขึ้น: ${conflicts.join("; ")}\nกรุณาตรวจสอบความสอดคล้องก่อนตอบ`
+      : "";
+
+  // 5. Fact/Assumption/Missing separation — 7. Self-consistency — 9. Graceful fallback
+  const coreRules = `
+กฎสำคัญ (บังคับทุกข้อ):
+- ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
+- ห้ามตัดสินใจแทนผู้ใช้
+- แยกประเภทข้อมูลด้วย label ดังนี้:
+  · [ข้อเท็จจริง] — ยืนยันได้จากหลักฐาน
+  · [สมมติฐาน] — อนุมาน ยังไม่พิสูจน์
+  · [ข้อมูลที่ขาด] — ต้องการแต่ไม่มี ให้ระบุและขอเพิ่มเติม
+- 4. ห้ามให้ความมั่นใจสูง (สูง) เมื่อข้อมูลไม่เพียงพอ ให้ระบุ "ต่ำ" หรือ "ไม่สามารถประเมินได้" แทน
+- 9. Graceful Fallback: หากข้อมูลไม่พอ ให้ระบุ [ข้อมูลที่ขาด] และเสนอสมมติฐานชัดเจน ห้ามเดาโดยไม่แจ้ง
+- 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน`;
 
   if (deepReasoning) {
     return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
 
-${toneInstruction}
-${memoryContext}
-${personalCtx}
+${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}
+${coreRules}
 
 คุณต้องวิเคราะห์เชิงลึกเต็มรูปแบบ โดยใช้กรอบ FIRE:
 - **F**act: ข้อเท็จจริงเชิงประจักษ์
@@ -265,21 +465,18 @@ ${personalCtx}
 - **R**isk: ความเสี่ยงและข้อจำกัด
 - **E**vidence: หลักฐานอ้างอิง
 
-ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
-ห้ามตัดสินใจแทนผู้ใช้ — เสนอทางเลือกและระดับความมั่นใจเท่านั้น
-
 โครงสร้างรายงานที่ต้องมี:
 ### # ข้อมูลและหลักฐาน (Information & Evidence Matrix)
-จำแนก Fact ออกจาก Interpretation ระบุระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ)
+จำแนก [ข้อเท็จจริง] / [สมมติฐาน] / [ข้อมูลที่ขาด] ระบุระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ)
 
 ### # ข้อโต้แย้งและความเสี่ยง (Counter Evidence & Critique)
 ชี้จุดอ่อน ข้อแย้ง หรือความเสี่ยงสำคัญ
 
 ### # สมมติฐานและผลกระทบ (Key Assumptions & Failure Impact)
-ระบุสมมติฐานหลักและผลกระทบหากพลาด
+ระบุ [สมมติฐาน] หลักและผลกระทบหากพลาด
 
-### # ข้อจำกัดของแนวทาง (Limitations & Unproven Boundaries)
-ระบุสิ่งที่แนวทางนี้ยังไม่สามารถพิสูจน์ได้
+### # ข้อจำกัดและ [ข้อมูลที่ขาด] (Limitations & Knowledge Gaps)
+ระบุสิ่งที่ยังพิสูจน์ไม่ได้และข้อมูลที่ต้องการเพิ่ม
 
 ### # ห่วงโซ่เหตุผล (Causal Chain & Uncertainty)
 [ต้นเหตุ] → [กลไก] → [ผลลัพธ์] พร้อมระดับความไม่แน่นอน
@@ -288,19 +485,18 @@ ${personalCtx}
 เสนอ 2-3 ทางเลือก พร้อม Pros/Cons/Risks
 
 ### # ข้อสรุปเชิงยุทธศาสตร์ (Strategic Conclusion)
-สรุปคำแนะนำพร้อมระดับความมั่นใจ ไม่ตัดสินใจแทน
+สรุปคำแนะนำพร้อมระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ) ไม่ตัดสินใจแทน
 
 [DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ (1-2 ประโยค)`;
   }
 
   return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)
 
-${toneInstruction}
-${memoryContext}
-${personalCtx}
+${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}
+${coreRules}
 
 กรอบการวิเคราะห์ PUNN FIRE:
-- Fact First: แยกข้อเท็จจริงออกจากความคิดเห็น
+- Fact First: แยก [ข้อเท็จจริง] ออกจาก [สมมติฐาน]
 - Inference-based Reasoning: ใช้เหตุผลจากหลักฐาน
 - Risk & Reflection: ประเมินความเสี่ยงและข้อจำกัด
 - Evidence Evaluation: ประเมินน้ำหนักหลักฐาน
@@ -310,18 +506,12 @@ ${personalCtx}
 วิเคราะห์บริบทและเจตนาของผู้ใช้
 
 ### 2. ข้อสรุปเชิงยุทธศาสตร์ (Strategic Analysis)
-วิเคราะห์หลักฐาน แยก Fact กับ Inference ระบุระดับความมั่นใจ
+วิเคราะห์หลักฐาน แยก [ข้อเท็จจริง] / [สมมติฐาน] / [ข้อมูลที่ขาด] ระบุระดับความมั่นใจ
 
 ### 3. ข้อจำกัดและทางเลือก (Boundaries & Options)
 ระบุข้อจำกัด ความเสี่ยง และเสนอทางเลือก 2-3 แนว
 
-[DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ พร้อมระดับความมั่นใจ
-
-กฎสำคัญ:
-- ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
-- ห้ามตัดสินใจแทนผู้ใช้
-- ระบุ "ระดับความมั่นใจ: สูง/ปานกลาง/ต่ำ" ทุกข้อสรุปสำคัญ
-- ใช้ถ้อยคำเชิงเสนอ เช่น "อาจ", "มีแนวโน้ม", "จากข้อมูลที่มี"`;
+[DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ พร้อมระดับความมั่นใจ`;
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -332,6 +522,7 @@ interface AnalyzeRequest {
   deepReasoning?: boolean;
   personalContext?: string;
   memories?: PCAState["memories"];
+  history?: ConversationTurn[]; // 1. Conversation Memory
 }
 
 router.post("/", async (req, res) => {
@@ -341,6 +532,7 @@ router.post("/", async (req, res) => {
     deepReasoning = false,
     personalContext = "",
     memories = [],
+    history = [],
   } = req.body as AnalyzeRequest;
 
   if (!question?.trim()) {
@@ -370,6 +562,8 @@ router.post("/", async (req, res) => {
     agency_checks: [],
     notes: [],
     confidence: "ปานกลาง",
+    conflicts: [],
+    missing_info: [],
     trace: [],
     llm_provider: "openai",
     llm_model: "gpt-4o",
@@ -379,23 +573,40 @@ router.post("/", async (req, res) => {
   };
 
   try {
-    // Run cognitive pipeline stages
+    // Pre-pipeline analysis
+    const context = validateContext(question, history);          // 3
+    const conflicts = detectConflicts(question, history);        // 6
+
+    // Cognitive pipeline
     stageObservation(state);
     stageUnderstanding(state);
     stagePurpose(state);
     stageMemoryRetrieval(state, memories);
     stageMentalModel(state);
     stageHypotheses(state);
-    stageEvidenceEvaluation(state);
-    stageCritique(state);
-    stageDecision(state);
+    stageEvidenceEvaluation(state, history);                     // 1 — history-aware
+    stageCritique(state, context);                               // 3 — context validation
+    stageDecision(state, history, memories, context, conflicts); // 6+8 — conflict + confidence
 
-    // LLM Communication stage
-    const systemPrompt = buildSystemPrompt(state, tone, deepReasoning, personalContext);
+    // 2. Working memory summary for system prompt
+    const workingMemory = buildWorkingMemory(history, state.language);
+
+    // LLM Communication stage — 1+7: pass history as messages for context + self-consistency
+    const systemPrompt = buildSystemPrompt(
+      state, tone, deepReasoning, personalContext,
+      workingMemory, context, conflicts
+    );
+
+    // Build message array: system + history turns (last 10) + current question
+    const historyMessages: OpenAI.Chat.ChatCompletionMessageParam[] = history
+      .slice(-10)
+      .map((t) => ({ role: t.role, content: t.content }));
+
     const completion = await getOpenAI().chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
+        ...historyMessages,
         { role: "user", content: question },
       ],
       max_completion_tokens: deepReasoning ? 3000 : 1800,
@@ -410,7 +621,6 @@ router.post("/", async (req, res) => {
 
     record(state, "COMMUNICATION", { response_length: responseText.length });
 
-    // Post-communication stages
     stageReflection(state);
     stageLearning(state);
 
@@ -426,6 +636,8 @@ router.post("/", async (req, res) => {
         purpose: state.purpose,
         decision: state.decision,
         confidence: state.confidence,
+        conflicts: state.conflicts,
+        missing_info: state.missing_info,
         critique: state.critique,
         reflection: state.reflection,
         learning: state.learning,

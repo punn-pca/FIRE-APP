@@ -75,6 +75,12 @@ export default function ChatScreen() {
       setIsLoading(true);
 
       try {
+        // 1. Conversation Memory — send last 10 turns as history
+        const history = messages
+          .filter((m) => m.id !== 'welcome' && !m.content.startsWith('⚠️'))
+          .slice(-10)
+          .map((m) => ({ role: m.role, content: m.content }));
+
         const response = await fetch(`${API_BASE}/api/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -84,6 +90,7 @@ export default function ChatScreen() {
             deepReasoning,
             personalContext: '',
             memories: [],
+            history,
           }),
         });
 

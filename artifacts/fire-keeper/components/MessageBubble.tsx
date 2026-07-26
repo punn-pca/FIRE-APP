@@ -20,6 +20,8 @@ export interface PCAState {
   purpose: string;
   decision: string;
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
+  conflicts?: string[];
+  missing_info?: string[];
   critique: string[];
   reflection: string[];
   learning: string[];
