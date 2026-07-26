@@ -15,6 +15,7 @@ function getOpenAI(): OpenAI {
 interface TraceEntry {
   stage: string;
   timestamp: string;
+  duration_ms: number;
   output: Record<string, unknown>;
 }
 
@@ -59,8 +60,20 @@ export function detectLanguage(text: string): "th" | "en" {
   return THAI_REGEX.test(text) ? "th" : "en";
 }
 
-function record(state: PCAState, stage: string, output: Record<string, unknown>) {
-  state.trace.push({ stage, timestamp: new Date().toISOString(), output });
+function record(state: PCAState, stage: string, output: Record<string, unknown>, duration_ms = 0) {
+  state.trace.push({ stage, timestamp: new Date().toISOString(), duration_ms, output });
+}
+
+/** Wraps a synchronous stage fn and stamps its wall-clock duration onto any
+ *  trace entries the fn appended. */
+function timed(state: PCAState, fn: () => void): void {
+  const before = state.trace.length;
+  const t = Date.now();
+  fn();
+  const ms = Date.now() - t;
+  for (let i = before; i < state.trace.length; i++) {
+    state.trace[i].duration_ms = ms;
+  }
 }
 
 // ─── 2. Working Memory: compact history summary ───────────────────────────────
@@ -577,16 +590,16 @@ router.post("/", async (req, res) => {
     const context = validateContext(question, history);          // 3
     const conflicts = detectConflicts(question, history);        // 6
 
-    // Cognitive pipeline
-    stageObservation(state);
-    stageUnderstanding(state);
-    stagePurpose(state);
-    stageMemoryRetrieval(state, memories);
-    stageMentalModel(state);
-    stageHypotheses(state);
-    stageEvidenceEvaluation(state, history);                     // 1 — history-aware
-    stageCritique(state, context);                               // 3 — context validation
-    stageDecision(state, history, memories, context, conflicts); // 6+8 — conflict + confidence
+    // Cognitive pipeline — each stage is timed independently (ms-level)
+    timed(state, () => stageObservation(state));
+    timed(state, () => stageUnderstanding(state));
+    timed(state, () => stagePurpose(state));
+    timed(state, () => stageMemoryRetrieval(state, memories));
+    timed(state, () => stageMentalModel(state));
+    timed(state, () => stageHypotheses(state));
+    timed(state, () => stageEvidenceEvaluation(state, history));
+    timed(state, () => stageCritique(state, context));
+    timed(state, () => stageDecision(state, history, memories, context, conflicts));
 
     // 2. Working memory summary for system prompt
     const workingMemory = buildWorkingMemory(history, state.language);
@@ -602,6 +615,8 @@ router.post("/", async (req, res) => {
       .slice(-10)
       .map((t) => ({ role: t.role, content: t.content }));
 
+    // LLM Communication — timed separately (async, can be seconds)
+    const llmStart = Date.now();
     const completion = await getOpenAI().chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -612,17 +627,17 @@ router.post("/", async (req, res) => {
       max_completion_tokens: deepReasoning ? 3000 : 1800,
       temperature: 0.7,
     });
+    const llmMs = Date.now() - llmStart;
 
     const responseText =
       completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
     state.response = responseText;
     state.llm_model = completion.model ?? "gpt-4o";
     state.notes.push(`LLM: openai (${state.llm_model})`);
+    record(state, "COMMUNICATION", { response_length: responseText.length, model: state.llm_model }, llmMs);
 
-    record(state, "COMMUNICATION", { response_length: responseText.length });
-
-    stageReflection(state);
-    stageLearning(state);
+    timed(state, () => stageReflection(state));
+    timed(state, () => stageLearning(state));
 
     state.end_time = new Date().toISOString();
     state.execution_time_ms = Date.now() - startMs;
@@ -642,6 +657,7 @@ router.post("/", async (req, res) => {
         reflection: state.reflection,
         learning: state.learning,
         agency_checks: state.agency_checks,
+        user_input: state.user_input,
         trace: state.trace,
         llm_provider: state.llm_provider,
         llm_model: state.llm_model,

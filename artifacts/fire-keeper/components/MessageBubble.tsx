@@ -13,7 +13,15 @@ import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 
+export interface TraceEntry {
+  stage: string;
+  timestamp: string;
+  duration_ms: number;
+  output: Record<string, unknown>;
+}
+
 export interface PCAState {
+  user_input?: string;
   notes: string[];
   observations: string[];
   understanding: string;
@@ -26,12 +34,243 @@ export interface PCAState {
   reflection: string[];
   learning: string[];
   agency_checks: string[];
-  trace: Array<{ stage: string; timestamp: string; output: Record<string, unknown> }>;
+  trace: TraceEntry[];
   llm_provider?: string;
   llm_model?: string;
   execution_time_ms?: number;
   start_time?: string;
   end_time?: string;
+}
+
+// ─── Stage metadata ───────────────────────────────────────────────────────────
+
+const STAGE_INFO: Record<string, { icon: string; th: string; en: string; desc: string }> = {
+  OBSERVATION:         { icon: '👁',  th: 'สังเกตการณ์',         en: 'Observation',          desc: 'รับข้อมูลจากผู้ใช้ ตรวจจับภาษา บันทึก input ดิบ' },
+  UNDERSTANDING:       { icon: '🧠', th: 'ทำความเข้าใจ',         en: 'Understanding',        desc: 'วิเคราะห์เจตนาและบริบทของคำถาม จำแนกประเภทปัญหา' },
+  PURPOSE:             { icon: '🎯', th: 'กำหนดจุดประสงค์',     en: 'Purpose',              desc: 'ระบุเป้าหมาย ข้อจำกัด และขอบเขตของการวิเคราะห์' },
+  MEMORY:              { icon: '💾', th: 'ดึงความจำ',            en: 'Memory Retrieval',     desc: 'ค้นหาข้อมูลจากหน่วยความจำระยะยาวและบริบทที่เกี่ยวข้อง' },
+  MENTAL_MODEL:        { icon: '🗺', th: 'แบบจำลองความคิด',     en: 'Mental Model',         desc: 'เลือกกรอบการวิเคราะห์ที่เหมาะสม (PUNN FIRE Framework)' },
+  HYPOTHESIS:          { icon: '💡', th: 'ตั้งสมมติฐาน',         en: 'Hypothesis',           desc: 'สร้างสมมติฐานเบื้องต้นจากข้อมูลที่มี ระบุความน่าจะเป็น' },
+  EVIDENCE_EVALUATION: { icon: '⚖️', th: 'ประเมินหลักฐาน',       en: 'Evidence Evaluation',  desc: 'รวบรวมและประเมินน้ำหนักหลักฐานจากหลายแหล่ง' },
+  CRITIQUE:            { icon: '🔍', th: 'วิจารณ์และตรวจสอบ',   en: 'Critique',             desc: 'ระบุข้อจำกัด ความเสี่ยง ข้อมูลที่ขาด ตรวจสอบ bias' },
+  DECISION:            { icon: '⚡', th: 'ตัดสินใจเชิงกลยุทธ์', en: 'Decision',             desc: 'คำนวณระดับความมั่นใจ สรุปทิศทางการตอบ รักษา Human Agency' },
+  COMMUNICATION:       { icon: '🤖', th: 'สื่อสาร (LLM)',        en: 'Communication (LLM)',  desc: 'ส่ง prompt ไปยัง OpenAI GPT รอและประมวลผล response' },
+  REFLECTION:          { icon: '🔄', th: 'สะท้อนคิด',            en: 'Reflection',           desc: 'ทบทวนกระบวนการทั้งหมด ตรวจสอบความสอดคล้องของผลลัพธ์' },
+  LEARNING:            { icon: '📚', th: 'บทเรียนและ Agency',    en: 'Learning',             desc: 'สกัดบทเรียน ยืนยันสิทธิ์ตัดสินใจของผู้ใช้ อัปเดต state' },
+};
+
+// ─── HTML Report Generator ────────────────────────────────────────────────────
+
+function generateHtmlReport(question: string, answer: string, pca: PCAState): string {
+  const totalMs = pca.execution_time_ms ?? 0;
+  const maxMs = Math.max(...pca.trace.map((t) => t.duration_ms ?? 0), 1);
+  const dateStr = pca.start_time
+    ? new Date(pca.start_time).toLocaleString('th-TH', { dateStyle: 'full', timeStyle: 'medium' })
+    : new Date().toLocaleString('th-TH');
+
+  const confClass =
+    pca.confidence === 'สูง' ? 'conf-high'
+    : pca.confidence === 'ปานกลาง' ? 'conf-mid'
+    : pca.confidence === 'ต่ำ' ? 'conf-low'
+    : 'conf-unknown';
+
+  // Stage rows
+  const stageRows = pca.trace.map((entry, i) => {
+    const info = STAGE_INFO[entry.stage] ?? { icon: '▸', th: entry.stage, en: entry.stage, desc: '' };
+    const ms = entry.duration_ms ?? 0;
+    const pct = Math.round((ms / maxMs) * 100);
+    const barColor = ms >= 2000 ? '#dc2626' : ms >= 500 ? '#f59e0b' : ms >= 100 ? '#22d3ee' : '#22c55e';
+    const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`;
+    const ts = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(11, 23) : '';
+    return `
+      <tr>
+        <td class="c-num">${i + 1}</td>
+        <td class="c-icon">${info.icon}</td>
+        <td class="c-name"><span class="name-th">${info.th}</span><br><span class="name-en">${info.en}</span></td>
+        <td class="c-desc">${escHtml(info.desc)}</td>
+        <td class="c-bar"><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${barColor}"></div></div></td>
+        <td class="c-ms" style="color:${barColor}">${msLabel}</td>
+        <td class="c-ts">${ts}</td>
+      </tr>`;
+  }).join('');
+
+  const critiqueItems = pca.critique.map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const reflectionItems = pca.reflection.map((r) => `<li>${escHtml(r)}</li>`).join('');
+  const conflictItems = (pca.conflicts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FIRE KEEPER — PCA Report</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-size:11pt;color:#111;background:#f3f4f6;line-height:1.6}
+@page{size:A4;margin:18mm 15mm}
+@media print{
+  .no-print{display:none!important}
+  .page-break{page-break-before:always}
+  body{background:#fff;font-size:10pt}
+  .page{box-shadow:none;padding:0}
+  .bar-fill{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}
+@media screen{
+  body{padding:20px}
+  .page{max-width:210mm;margin:0 auto;background:#fff;padding:22mm 18mm;box-shadow:0 4px 24px rgba(0,0,0,.1);border-radius:4px}
+}
+/* Print bar */
+.print-bar{max-width:210mm;margin:0 auto 16px;display:flex;gap:10px}
+.btn{padding:9px 20px;border:none;border-radius:8px;cursor:pointer;font-size:10pt;font-weight:700;font-family:inherit}
+.btn-print{background:#f97316;color:#fff}
+.btn-print:hover{background:#ea6c00}
+/* Header */
+.rpt-header{display:flex;align-items:flex-start;gap:14px;padding-bottom:14px;border-bottom:3px solid #f97316;margin-bottom:14px}
+.logo-flame{font-size:30pt;line-height:1}
+.logo-text{}
+.logo-title{font-size:17pt;font-weight:900;color:#f97316;letter-spacing:.5px}
+.logo-sub{font-size:9pt;color:#666;margin-top:1px}
+/* Meta strip */
+.meta-strip{display:flex;flex-wrap:wrap;gap:16px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:9px 14px;margin-bottom:16px;font-size:9pt}
+.meta-item{display:flex;align-items:center;gap:5px}
+.meta-lbl{font-weight:700;color:#92400e}
+.meta-val{color:#111}
+/* Confidence badge */
+.cbadge{padding:2px 9px;border-radius:10px;font-size:8.5pt;font-weight:700;display:inline-block}
+.conf-high{background:#dcfce7;color:#166534}
+.conf-mid{background:#fef9c3;color:#854d0e}
+.conf-low{background:#fee2e2;color:#991b1b}
+.conf-unknown{background:#f1f5f9;color:#475569}
+/* Section */
+.section{margin-bottom:18px}
+.sec-title{font-size:11.5pt;font-weight:800;color:#f97316;border-bottom:1.5px solid #fed7aa;padding-bottom:4px;margin-bottom:10px}
+/* Question */
+.question-box{background:#eff6ff;border-left:4px solid #3b82f6;border-radius:0 6px 6px 0;padding:10px 14px;font-size:11pt;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+/* Answer */
+.answer-box{background:#f9f9f9;border:1px solid #e5e7eb;border-radius:6px;padding:13px 16px;font-size:10.5pt;line-height:1.75;white-space:pre-wrap;word-break:break-word}
+/* Timeline table */
+.tl-table{width:100%;border-collapse:collapse;font-size:9pt}
+.tl-table thead th{background:#111;color:#fff;padding:7px 8px;text-align:left;font-size:8.5pt;font-weight:700}
+.tl-table tbody tr:nth-child(even){background:#f9f9f9}
+.tl-table td{padding:6px 8px;vertical-align:middle;border-bottom:1px solid #eee}
+.tl-table tfoot td{background:#1f2937;color:#fff;padding:7px 8px;font-weight:700}
+.c-num{text-align:center;width:22px;font-weight:700;color:#888;font-size:8pt}
+.c-icon{text-align:center;width:24px;font-size:12pt}
+.c-name{min-width:110px;font-weight:600}
+.name-th{font-size:9.5pt}
+.name-en{font-size:7.5pt;color:#888;font-weight:400}
+.c-desc{color:#555;font-size:8pt;max-width:200px;line-height:1.4}
+.c-bar{width:110px}
+.bar-track{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .3s}
+.c-ms{text-align:right;font-family:'Courier New',monospace;font-size:9pt;font-weight:700;white-space:nowrap;min-width:72px}
+.c-ts{text-align:right;font-family:'Courier New',monospace;font-size:7.5pt;color:#999;white-space:nowrap;min-width:90px}
+.total-lbl{font-size:9pt}
+.total-ms{text-align:right;font-family:monospace;font-size:11pt;color:#fb923c}
+/* Lists */
+.ul-items{list-style:none;display:flex;flex-direction:column;gap:4px}
+.ul-items li{padding-left:14px;position:relative;font-size:10pt;line-height:1.55}
+.ul-items li::before{content:'•';position:absolute;left:0;color:#f97316;font-weight:700}
+/* 2-col grid */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media print{.grid2{display:grid}}
+/* Footer */
+.rpt-footer{margin-top:22px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:8pt;color:#aaa;text-align:center}
+</style>
+</head>
+<body>
+<div class="no-print print-bar">
+  <button class="btn btn-print" onclick="window.print()">🖨&nbsp; พิมพ์ / บันทึก PDF</button>
+</div>
+<div class="page">
+
+<!-- HEADER -->
+<div class="rpt-header">
+  <div class="logo-flame">🔥</div>
+  <div class="logo-text">
+    <div class="logo-title">FIRE KEEPER</div>
+    <div class="logo-sub">PUNN Cognitive Architecture (PCA) — Analysis Report</div>
+  </div>
+</div>
+
+<!-- META STRIP -->
+<div class="meta-strip">
+  <div class="meta-item"><span class="meta-lbl">วันที่:</span><span class="meta-val">${escHtml(dateStr)}</span></div>
+  <div class="meta-item"><span class="meta-lbl">โมเดล:</span><span class="meta-val">${escHtml(pca.llm_provider ?? 'openai')} / ${escHtml(pca.llm_model ?? 'gpt-4o')}</span></div>
+  <div class="meta-item"><span class="meta-lbl">เวลารวม:</span><span class="meta-val">${totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs + ' ms'}</span></div>
+  <div class="meta-item"><span class="meta-lbl">ขั้นตอน:</span><span class="meta-val">${pca.trace.length} stages</span></div>
+  <div class="meta-item"><span class="meta-lbl">ความมั่นใจ:</span><span class="cbadge ${confClass}">${pca.confidence}</span></div>
+</div>
+
+<!-- QUESTION -->
+<div class="section">
+  <div class="sec-title">❓ คำถาม / สิ่งที่วิเคราะห์</div>
+  <div class="question-box">${escHtml(question)}</div>
+</div>
+
+<!-- PCA TIMELINE -->
+<div class="section">
+  <div class="sec-title">⏱ กระบวนการ PCA — เวลาแต่ละขั้นตอน (มิลลิวินาที)</div>
+  <table class="tl-table">
+    <thead>
+      <tr>
+        <th>#</th><th></th><th>ขั้นตอน</th><th>รายละเอียด</th><th>ระยะเวลา</th><th>ms</th><th>เวลา (HH:MM:SS.mmm)</th>
+      </tr>
+    </thead>
+    <tbody>${stageRows}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="5" class="total-lbl">รวมเวลาทั้งหมด</td>
+        <td class="total-ms">${totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs + ' ms'}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<!-- ANSWER (page break before if long) -->
+<div class="section page-break">
+  <div class="sec-title">💬 ผลการวิเคราะห์</div>
+  <div class="answer-box">${escHtml(answer)}</div>
+</div>
+
+<!-- CRITIQUE + REFLECTION -->
+<div class="section">
+  <div class="grid2">
+    <div>
+      <div class="sec-title">🔍 ข้อวิจารณ์และข้อจำกัด</div>
+      <ul class="ul-items">${critiqueItems || '<li>—</li>'}</ul>
+    </div>
+    <div>
+      <div class="sec-title">🔄 การสะท้อนคิด</div>
+      <ul class="ul-items">${reflectionItems || '<li>—</li>'}</ul>
+    </div>
+  </div>
+</div>
+
+${conflictItems ? `
+<div class="section">
+  <div class="sec-title">⚠️ ความขัดแย้งที่ตรวจพบ</div>
+  <ul class="ul-items">${conflictItems}</ul>
+</div>` : ''}
+
+<!-- FOOTER -->
+<div class="rpt-footer">
+  Generated by FIRE KEEPER · PUNN Cognitive Architecture (PCA) · ${new Date().getFullYear()}
+  &nbsp;|&nbsp; Human Agency Preserved — ผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้ายเสมอ
+</div>
+
+</div><!-- /page -->
+</body>
+</html>`;
+}
+
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 export interface Message {
@@ -142,6 +381,33 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     }
     setTimeout(() => setCopied(false), 2000);
   }, [message.content]);
+
+  const handleExportHtml = useCallback(async () => {
+    if (!message.pcaState) return;
+    const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
+    const html = generateHtmlReport(question, message.content, message.pcaState);
+
+    if (Platform.OS === 'web') {
+      // Web: trigger a real file download
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `FIRE_KEEPER_Report_${Date.now()}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } else {
+      // Native: share the HTML text so the user can save to Files and open in browser
+      try {
+        await Share.share({ message: html, title: 'FIRE KEEPER PCA Report' });
+      } catch {
+        await Clipboard.setStringAsync(html);
+        Alert.alert('คัดลอกแล้ว', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว เปิดในเบราว์เซอร์เพื่อพิมพ์ได้เลยครับ');
+      }
+    }
+  }, [message]);
 
   const handleShare = useCallback(async () => {
     const timestamp = new Date().toLocaleString('th-TH');
@@ -288,18 +554,44 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               </Text>
               {message.pcaState.execution_time_ms != null && (
                 <Text style={styles.pcaMetaRow}>
-                  <Text style={styles.pcaMetaLabel}>เวลา: </Text>
-                  {(message.pcaState.execution_time_ms / 1000).toFixed(2)}s
+                  <Text style={styles.pcaMetaLabel}>เวลารวม: </Text>
+                  {message.pcaState.execution_time_ms >= 1000
+                    ? `${(message.pcaState.execution_time_ms / 1000).toFixed(2)}s`
+                    : `${message.pcaState.execution_time_ms}ms`}
                 </Text>
               )}
               <Text style={styles.pcaMetaRow}>
                 <Text style={styles.pcaMetaLabel}>ขั้นตอน: </Text>
                 {message.pcaState.trace.length} stages
               </Text>
+              {/* Per-stage timing mini-list */}
+              {message.pcaState.trace.map((entry, i) => {
+                const info = STAGE_INFO[entry.stage];
+                const ms = entry.duration_ms ?? 0;
+                const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
+                const dotColor = ms >= 2000 ? '#ef4444' : ms >= 500 ? '#f59e0b' : ms >= 100 ? '#22d3ee' : '#22c55e';
+                return (
+                  <View key={i} style={styles.traceRow}>
+                    <View style={[styles.traceDot, { backgroundColor: dotColor }]} />
+                    <Text style={styles.traceStage} numberOfLines={1}>
+                      {info?.icon ?? '▸'} {info?.th ?? entry.stage}
+                    </Text>
+                    <Text style={[styles.traceMs, { color: dotColor }]}>{msLabel}</Text>
+                  </View>
+                );
+              })}
               <Text style={[styles.pcaMetaRow, { marginTop: 6 }]}>
                 <Text style={styles.pcaMetaLabel}>บริบท: </Text>
                 {message.pcaState.understanding}
               </Text>
+              {/* Export HTML button */}
+              <Pressable
+                onPress={handleExportHtml}
+                style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
+              >
+                <Ionicons name="document-outline" size={13} color="#f97316" />
+                <Text style={styles.exportHtmlLabel}>ส่งออก HTML (พิมพ์ได้ · A4)</Text>
+              </Pressable>
             </View>
           )}
 
@@ -494,6 +786,48 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontFamily: 'Inter_600SemiBold',
       fontWeight: '600' as const,
       color: colors.foreground,
+    },
+    traceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 2,
+    },
+    traceDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    traceStage: {
+      flex: 1,
+      color: colors.mutedForeground,
+      fontSize: 11,
+      fontFamily: 'Inter_400Regular',
+    },
+    traceMs: {
+      fontFamily: 'Inter_600SemiBold',
+      fontSize: 11,
+      fontWeight: '600' as const,
+      minWidth: 48,
+      textAlign: 'right',
+    },
+    exportHtmlBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      marginTop: 10,
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: '#f97316',
+      alignSelf: 'flex-start',
+    },
+    exportHtmlLabel: {
+      color: '#f97316',
+      fontSize: 12,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
     },
     footer: {
       flexDirection: 'row',
