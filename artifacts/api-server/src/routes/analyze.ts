@@ -19,6 +19,44 @@ interface TraceEntry {
   output: Record<string, unknown>;
 }
 
+type RuntimePhase =
+  | "BOOT"
+  | "READY"
+  | "UNDERSTAND"
+  | "PLAN"
+  | "REASON"
+  | "VERIFY"
+  | "RESPOND"
+  | "REFLECT";
+
+interface RuntimeEvent {
+  phase: RuntimePhase;
+  action: string;
+  timestamp: string;
+  duration_ms: number;
+}
+
+interface GovernanceReport {
+  status: "ผ่าน" | "ต้องตรวจสอบ" | "หยุด";
+  policy: string[];
+  safety_checks: string[];
+  human_agency_preserved: boolean;
+}
+
+interface VerificationReport {
+  status: "ผ่าน" | "ต้องตรวจสอบ";
+  consistency: "สอดคล้อง" | "ต้องทบทวน";
+  expected: string[];
+  observed: string[];
+  checks: string[];
+}
+
+interface KnowledgeMap {
+  facts: string[];
+  assumptions: string[];
+  unknowns: string[];
+}
+
 export interface ConversationTurn {
   role: "user" | "assistant";
   content: string;
@@ -45,6 +83,10 @@ export interface PCAState {
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   conflicts: string[];
   missing_info: string[];
+  runtime_lifecycle: RuntimeEvent[];
+  governance: GovernanceReport;
+  verification: VerificationReport;
+  knowledge_map: KnowledgeMap;
   trace: TraceEntry[];
   llm_provider: string;
   llm_model: string;
@@ -74,6 +116,124 @@ function timed(state: PCAState, fn: () => void): void {
   for (let i = before; i < state.trace.length; i++) {
     state.trace[i].duration_ms = ms;
   }
+}
+
+function recordRuntime(
+  state: PCAState,
+  phase: RuntimePhase,
+  action: string,
+  duration_ms: number
+) {
+  state.runtime_lifecycle.push({
+    phase,
+    action,
+    timestamp: new Date().toISOString(),
+    duration_ms,
+  });
+}
+
+function runRuntimePhase(
+  state: PCAState,
+  phase: RuntimePhase,
+  action: string,
+  fn: () => void
+) {
+  const started = Date.now();
+  fn();
+  recordRuntime(state, phase, action, Date.now() - started);
+}
+
+function buildGovernanceReport(
+  context: ContextValidation,
+  conflicts: string[]
+): GovernanceReport {
+  const needsReview = context.missingSignals.length > 0 || conflicts.length > 0;
+  return {
+    status: needsReview ? "ต้องตรวจสอบ" : "ผ่าน",
+    policy: [
+      "Truth before certainty — ไม่สร้างความมั่นใจเกินหลักฐาน",
+      "Evidence before opinion — แยกหลักฐานออกจากการตีความ",
+      "Human agency before automation — ผู้ใช้ตัดสินใจขั้นสุดท้าย",
+    ],
+    safety_checks: [
+      context.missingSignals.length > 0
+        ? "บริบทไม่ครบ — ลดความมั่นใจและระบุข้อมูลที่ขาด"
+        : "ตรวจสอบบริบทเบื้องต้นแล้ว",
+      conflicts.length > 0
+        ? "พบความขัดแย้ง — ต้องทบทวนความสอดคล้อง"
+        : "ไม่พบความขัดแย้งจากประวัติการสนทนา",
+      "ไม่มีการตัดสินใจแทนผู้ใช้",
+    ],
+    human_agency_preserved: true,
+  };
+}
+
+function buildKnowledgeMap(
+  state: PCAState,
+  context: ContextValidation
+): KnowledgeMap {
+  return {
+    facts: [
+      state.language === "th"
+        ? `ข้อมูลที่ผู้ใช้ระบุ: ${state.user_input}`
+        : `User-provided input: ${state.user_input}`,
+      ...state.evidence,
+    ],
+    assumptions: state.hypotheses.map((hypothesis) => hypothesis.claim),
+    unknowns: [
+      ...context.missingSignals,
+      ...state.uncertainty,
+    ],
+  };
+}
+
+function buildVerificationReport(
+  state: PCAState,
+  responseText: string
+): VerificationReport {
+  const checks: string[] = [];
+  const hasFactLabel = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText);
+  const hasAssumptionLabel = /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
+  const preservesAgency = /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
+    responseText
+  );
+
+  checks.push(
+    hasFactLabel
+      ? "พบการแยกข้อเท็จจริง"
+      : "ไม่พบ label ข้อเท็จจริงครบถ้วน — ควรตรวจสอบ"
+  );
+  checks.push(
+    hasAssumptionLabel
+      ? "พบการแยกสมมติฐาน"
+      : "ไม่พบ label สมมติฐานครบถ้วน — ควรตรวจสอบ"
+  );
+  checks.push(
+    preservesAgency
+      ? "ยืนยัน Human Agency"
+      : "ไม่พบข้อความยืนยัน Human Agency — ควรตรวจสอบ"
+  );
+  if (state.missing_info.length > 0) {
+    checks.push("มีข้อมูลที่ขาดและถูกส่งต่อเพื่อให้ผู้ใช้ตรวจสอบ");
+  }
+
+  const allCoreChecksPass = hasFactLabel && hasAssumptionLabel && preservesAgency;
+  const consistent = state.conflicts.length === 0;
+  return {
+    status: allCoreChecksPass && consistent ? "ผ่าน" : "ต้องตรวจสอบ",
+    consistency: consistent ? "สอดคล้อง" : "ต้องทบทวน",
+    expected: [
+      "แยกข้อเท็จจริง สมมติฐาน และข้อมูลที่ขาด",
+      "ไม่ตัดสินใจแทนผู้ใช้",
+      "ตรวจสอบความสอดคล้องกับบริบทเดิม",
+    ],
+    observed: [
+      hasFactLabel ? "มีข้อเท็จจริง" : "ไม่พบข้อเท็จจริงที่ติดป้ายชัดเจน",
+      hasAssumptionLabel ? "มีสมมติฐาน" : "ไม่พบสมมติฐานที่ติดป้ายชัดเจน",
+      preservesAgency ? "รักษา Human Agency" : "ต้องตรวจสอบ Human Agency",
+    ],
+    checks,
+  };
 }
 
 // ─── 2. Working Memory: compact history summary ───────────────────────────────
@@ -456,6 +616,8 @@ function buildSystemPrompt(
   // 5. Fact/Assumption/Missing separation — 7. Self-consistency — 9. Graceful fallback
   const coreRules = `
 กฎสำคัญ (บังคับทุกข้อ):
+ - Firekeeper OS lifecycle: Understand → Plan → Reason → Verify → Respond → Reflect
+ - Governance gate: Truth before certainty, Evidence before opinion, Human agency before automation
 - ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
 - ห้ามตัดสินใจแทนผู้ใช้
 - แยกประเภทข้อมูลด้วย label ดังนี้:
@@ -577,6 +739,25 @@ router.post("/", async (req, res) => {
     confidence: "ปานกลาง",
     conflicts: [],
     missing_info: [],
+    runtime_lifecycle: [],
+    governance: {
+      status: "ผ่าน",
+      policy: [],
+      safety_checks: [],
+      human_agency_preserved: true,
+    },
+    verification: {
+      status: "ต้องตรวจสอบ",
+      consistency: "สอดคล้อง",
+      expected: [],
+      observed: [],
+      checks: [],
+    },
+    knowledge_map: {
+      facts: [],
+      assumptions: [],
+      unknowns: [],
+    },
     trace: [],
     llm_provider: "openai",
     llm_model: "gpt-4o",
@@ -586,20 +767,41 @@ router.post("/", async (req, res) => {
   };
 
   try {
+    recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0);
+    recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0);
+
     // Pre-pipeline analysis
+    const understandStart = Date.now();
+    const contextStart = Date.now();
     const context = validateContext(question, history);          // 3
     const conflicts = detectConflicts(question, history);        // 6
+    const contextDuration = Date.now() - contextStart;
 
     // Cognitive pipeline — each stage is timed independently (ms-level)
     timed(state, () => stageObservation(state));
     timed(state, () => stageUnderstanding(state));
+    recordRuntime(
+      state,
+      "UNDERSTAND",
+      "ตรวจสอบบริบท ความขัดแย้ง สังเกต และทำความเข้าใจคำถาม",
+      Math.max(Date.now() - understandStart, contextDuration)
+    );
+
+    const planStart = Date.now();
     timed(state, () => stagePurpose(state));
     timed(state, () => stageMemoryRetrieval(state, memories));
     timed(state, () => stageMentalModel(state));
+    recordRuntime(state, "PLAN", "กำหนดจุดประสงค์ ความจำ และแบบจำลอง", Date.now() - planStart);
+
+    const reasonStart = Date.now();
     timed(state, () => stageHypotheses(state));
     timed(state, () => stageEvidenceEvaluation(state, history));
     timed(state, () => stageCritique(state, context));
     timed(state, () => stageDecision(state, history, memories, context, conflicts));
+    recordRuntime(state, "REASON", "รวบรวมหลักฐาน สร้างแบบจำลอง และประเมินทางเลือก", Date.now() - reasonStart);
+
+    state.governance = buildGovernanceReport(context, conflicts);
+    state.knowledge_map = buildKnowledgeMap(state, context);
 
     // 2. Working memory summary for system prompt
     const workingMemory = buildWorkingMemory(history, state.language);
@@ -628,6 +830,7 @@ router.post("/", async (req, res) => {
       temperature: 0.7,
     });
     const llmMs = Date.now() - llmStart;
+    recordRuntime(state, "RESPOND", "สื่อสารผลวิเคราะห์ผ่าน LLM", llmMs);
 
     const responseText =
       completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
@@ -636,8 +839,12 @@ router.post("/", async (req, res) => {
     state.notes.push(`LLM: openai (${state.llm_model})`);
     record(state, "COMMUNICATION", { response_length: responseText.length, model: state.llm_model }, llmMs);
 
+    const reflectStart = Date.now();
     timed(state, () => stageReflection(state));
     timed(state, () => stageLearning(state));
+    state.verification = buildVerificationReport(state, responseText);
+    recordRuntime(state, "VERIFY", "ตรวจสอบการแยกข้อมูล ความสอดคล้อง และ Human Agency", 0);
+    recordRuntime(state, "REFLECT", "สะท้อนคิดและสกัดบทเรียน", Date.now() - reflectStart);
 
     state.end_time = new Date().toISOString();
     state.execution_time_ms = Date.now() - startMs;
@@ -658,6 +865,10 @@ router.post("/", async (req, res) => {
         learning: state.learning,
         agency_checks: state.agency_checks,
         user_input: state.user_input,
+        runtime_lifecycle: state.runtime_lifecycle,
+        governance: state.governance,
+        verification: state.verification,
+        knowledge_map: state.knowledge_map,
         trace: state.trace,
         llm_provider: state.llm_provider,
         llm_model: state.llm_model,

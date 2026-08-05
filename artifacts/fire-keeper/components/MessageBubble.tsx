@@ -20,6 +20,34 @@ export interface TraceEntry {
   output: Record<string, unknown>;
 }
 
+export interface RuntimeEvent {
+  phase: string;
+  action: string;
+  timestamp: string;
+  duration_ms: number;
+}
+
+export interface GovernanceReport {
+  status: 'ผ่าน' | 'ต้องตรวจสอบ' | 'หยุด';
+  policy: string[];
+  safety_checks: string[];
+  human_agency_preserved: boolean;
+}
+
+export interface VerificationReport {
+  status: 'ผ่าน' | 'ต้องตรวจสอบ';
+  consistency: 'สอดคล้อง' | 'ต้องทบทวน';
+  expected: string[];
+  observed: string[];
+  checks: string[];
+}
+
+export interface KnowledgeMap {
+  facts: string[];
+  assumptions: string[];
+  unknowns: string[];
+}
+
 export interface PCAState {
   user_input?: string;
   notes: string[];
@@ -30,6 +58,10 @@ export interface PCAState {
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   conflicts?: string[];
   missing_info?: string[];
+  runtime_lifecycle?: RuntimeEvent[];
+  governance?: GovernanceReport;
+  verification?: VerificationReport;
+  knowledge_map?: KnowledgeMap;
   critique: string[];
   reflection: string[];
   learning: string[];
@@ -97,6 +129,19 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
   const critiqueItems = pca.critique.map((c) => `<li>${escHtml(c)}</li>`).join('');
   const reflectionItems = pca.reflection.map((r) => `<li>${escHtml(r)}</li>`).join('');
   const conflictItems = (pca.conflicts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const lifecycleRows = (pca.runtime_lifecycle ?? []).map((event, i) => `
+    <tr>
+      <td class="c-num">${i + 1}</td>
+      <td class="c-name"><span class="name-th">${escHtml(event.phase)}</span></td>
+      <td class="c-desc">${escHtml(event.action)}</td>
+      <td class="c-ms">${event.duration_ms ?? 0} ms</td>
+      <td class="c-ts">${event.timestamp ? new Date(event.timestamp).toISOString().slice(11, 23) : ''}</td>
+    </tr>`).join('');
+  const governanceItems = (pca.governance?.safety_checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const verificationItems = (pca.verification?.checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const factItems = (pca.knowledge_map?.facts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const assumptionItems = (pca.knowledge_map?.assumptions ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const unknownItems = (pca.knowledge_map?.unknowns ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
 
   return `<!DOCTYPE html>
 <html lang="th">
@@ -174,8 +219,13 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 /* 2-col grid */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media print{.grid2{display:grid}}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.map-title{font-weight:800;font-size:9pt;margin-bottom:5px}
+.fact-title{color:#166534}.assumption-title{color:#92400e}.unknown-title{color:#475569}
+.status-line{font-size:9pt;margin-bottom:6px}
 /* Footer */
 .rpt-footer{margin-top:22px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:8pt;color:#aaa;text-align:center}
+@media print{.grid3{display:grid}}
 </style>
 </head>
 <body>
@@ -226,6 +276,41 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
       </tr>
     </tfoot>
   </table>
+</div>
+
+<!-- FIREKEEPER OS RUNTIME -->
+<div class="section">
+  <div class="sec-title">⚙️ Firekeeper OS Runtime Lifecycle</div>
+  <table class="tl-table">
+    <thead><tr><th>#</th><th>Phase</th><th>การทำงาน</th><th>เวลา</th><th>Timestamp</th></tr></thead>
+    <tbody>${lifecycleRows || '<tr><td colspan="5">ไม่มีข้อมูล lifecycle</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- GOVERNANCE + VERIFICATION -->
+<div class="section">
+  <div class="grid2">
+    <div>
+      <div class="sec-title">🛡 Governance & Safety</div>
+      <div class="status-line">สถานะ: <span class="cbadge ${pca.governance?.status === 'ผ่าน' ? 'conf-high' : pca.governance?.status === 'หยุด' ? 'conf-low' : 'conf-mid'}">${escHtml(pca.governance?.status ?? 'ต้องตรวจสอบ')}</span></div>
+      <ul class="ul-items">${governanceItems || '<li>—</li>'}</ul>
+    </div>
+    <div>
+      <div class="sec-title">✅ Verification</div>
+      <div class="status-line">สถานะ: <span class="cbadge ${pca.verification?.status === 'ผ่าน' ? 'conf-high' : 'conf-mid'}">${escHtml(pca.verification?.status ?? 'ต้องตรวจสอบ')}</span></div>
+      <ul class="ul-items">${verificationItems || '<li>—</li>'}</ul>
+    </div>
+  </div>
+</div>
+
+<!-- KNOWLEDGE MAP -->
+<div class="section">
+  <div class="sec-title">🧭 Knowledge Map</div>
+  <div class="grid3">
+    <div><div class="map-title fact-title">[ข้อเท็จจริง]</div><ul class="ul-items">${factItems || '<li>—</li>'}</ul></div>
+    <div><div class="map-title assumption-title">[สมมติฐาน]</div><ul class="ul-items">${assumptionItems || '<li>—</li>'}</ul></div>
+    <div><div class="map-title unknown-title">[ข้อมูลที่ขาด / Unknowns]</div><ul class="ul-items">${unknownItems || '<li>—</li>'}</ul></div>
+  </div>
 </div>
 
 <!-- ANSWER (page break before if long) -->
@@ -580,6 +665,52 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   </View>
                 );
               })}
+              {message.pcaState.runtime_lifecycle && message.pcaState.runtime_lifecycle.length > 0 && (
+                <>
+                  <Text style={[styles.pcaMetaRow, { marginTop: 8 }]}>
+                    <Text style={styles.pcaMetaLabel}>Firekeeper OS: </Text>
+                    BOOT → READY → UNDERSTAND → PLAN → REASON → VERIFY → RESPOND → REFLECT
+                  </Text>
+                  {message.pcaState.runtime_lifecycle.map((event, i) => (
+                    <View key={`runtime-${i}`} style={styles.traceRow}>
+                      <View style={[styles.phaseBadge, { backgroundColor: colors.primary + '22' }]}>
+                        <Text style={[styles.phaseBadgeText, { color: colors.primary }]}>{event.phase}</Text>
+                      </View>
+                      <Text style={styles.traceStage} numberOfLines={1}>{event.action}</Text>
+                      <Text style={styles.traceMs}>{event.duration_ms}ms</Text>
+                    </View>
+                  ))}
+                </>
+              )}
+              {message.pcaState.governance && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>🛡 Governance: {message.pcaState.governance.status}</Text>
+                  {message.pcaState.governance.safety_checks.map((check, i) => (
+                    <Text key={`safety-${i}`} style={styles.osCardText}>• {check}</Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.verification && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>✅ Verification: {message.pcaState.verification.status}</Text>
+                  <Text style={styles.osCardText}>
+                    ความสอดคล้อง: {message.pcaState.verification.consistency}
+                  </Text>
+                </View>
+              )}
+              {message.pcaState.knowledge_map && (
+                <View style={styles.knowledgeCard}>
+                  <Text style={[styles.osCardTitle, { color: '#166534' }]}>
+                    [ข้อเท็จจริง] {message.pcaState.knowledge_map.facts.length}
+                  </Text>
+                  <Text style={[styles.osCardTitle, { color: '#92400e' }]}>
+                    [สมมติฐาน] {message.pcaState.knowledge_map.assumptions.length}
+                  </Text>
+                  <Text style={[styles.osCardTitle, { color: '#475569' }]}>
+                    [ข้อมูลที่ขาด] {message.pcaState.knowledge_map.unknowns.length}
+                  </Text>
+                </View>
+              )}
               <Text style={[styles.pcaMetaRow, { marginTop: 6 }]}>
                 <Text style={styles.pcaMetaLabel}>บริบท: </Text>
                 {message.pcaState.understanding}
@@ -810,6 +941,48 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontWeight: '600' as const,
       minWidth: 48,
       textAlign: 'right',
+    },
+    phaseBadge: {
+      minWidth: 58,
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 5,
+      alignItems: 'center',
+    },
+    phaseBadgeText: {
+      fontSize: 8,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    osCard: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 8,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 3,
+    },
+    osCardTitle: {
+      color: colors.foreground,
+      fontSize: 11,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    osCardText: {
+      color: colors.mutedForeground,
+      fontSize: 10,
+      lineHeight: 15,
+      fontFamily: 'Inter_400Regular',
+    },
+    knowledgeCard: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 8,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 3,
     },
     exportHtmlBtn: {
       flexDirection: 'row',

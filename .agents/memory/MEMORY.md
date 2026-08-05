@@ -1,0 +1,1 @@
+- [Firekeeper OS contract](firekeeper-os-integration.md) — runtime lifecycle, governance, verification, and knowledge map are first-class analysis metadata.
