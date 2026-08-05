@@ -6,19 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DataflowEdge } from './dataflowEdge';
-import type { DeveloperTraceRuntimeLifecycleItem } from './developerTraceRuntimeLifecycleItem';
-import type { DeveloperTraceTraceItem } from './developerTraceTraceItem';
 import type { ModuleAudit } from './moduleAudit';
 import type { ModuleRuntimeMetric } from './moduleRuntimeMetric';
 import type { ReasoningGraph } from './reasoningGraph';
 import type { RuntimeSummary } from './runtimeSummary';
 import type { StateTransition } from './stateTransition';
+import type { SystemTraceRuntimeLifecycleItem } from './systemTraceRuntimeLifecycleItem';
+import type { SystemTraceTraceItem } from './systemTraceTraceItem';
 
-export interface DeveloperTrace {
+export interface SystemTrace {
   notes: string[];
   runtime_summary: RuntimeSummary;
-  runtime_lifecycle: DeveloperTraceRuntimeLifecycleItem[];
-  trace: DeveloperTraceTraceItem[];
+  runtime_lifecycle: SystemTraceRuntimeLifecycleItem[];
+  trace: SystemTraceTraceItem[];
   dataflow: DataflowEdge[];
   runtime_metrics: ModuleRuntimeMetric[];
   module_audit: ModuleAudit[];

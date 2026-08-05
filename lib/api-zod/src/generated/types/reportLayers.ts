@@ -6,11 +6,13 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AnalystReport } from './analystReport';
-import type { DeveloperTrace } from './developerTrace';
+import type { ReportLayersConfidenceSummary } from './reportLayersConfidenceSummary';
+import type { SystemTrace } from './systemTrace';
 import type { UserReport } from './userReport';
 
 export interface ReportLayers {
   user_report: UserReport;
   analyst_report: AnalystReport;
-  developer_trace: DeveloperTrace;
+  system_trace: SystemTrace;
+  confidence_summary: ReportLayersConfidenceSummary;
 }

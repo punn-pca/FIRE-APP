@@ -461,8 +461,11 @@ describe("buildReportLayers — separated output contract", () => {
   state.response = "คำตอบปกติสำหรับผู้ใช้";
   const reports = buildReportLayers(state);
   assert("User Report contains the fixed answer", reports.user_report.answer === state.response);
+  assert("User Report contains an executive summary", reports.user_report.executive_summary.length > 0);
+  assert("Executive Summary stays concise", reports.user_report.executive_summary.length <= 240);
   assert("Analyst Report contains evidence", reports.analyst_report.evidence_report === state.evidence_report);
-  assert("Developer Trace contains runtime trace", reports.developer_trace.trace === state.trace);
+  assert("System Trace contains runtime trace", reports.system_trace.trace === state.trace);
+  assert("Confidence is shared across reports", reports.confidence_summary.score === state.confidence_report.score);
   assert("Decision Matrix is analyst-only", reports.analyst_report.decision_matrix !== undefined);
   assert("User Report does not expose decision matrix", !("decision_matrix" in reports.user_report));
 

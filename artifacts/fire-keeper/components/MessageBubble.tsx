@@ -345,6 +345,7 @@ export interface PCAState {
 
 export interface UserReport {
   answer: string;
+  executive_summary: string;
   route?: IntentRoute;
   confidence: PCAState['confidence'];
   limitations: string[];
@@ -363,7 +364,7 @@ export interface AnalystReport {
   decision_matrix?: DecisionMatrix;
 }
 
-export interface DeveloperTrace {
+export interface SystemTrace {
   notes: string[];
   runtime_summary?: RuntimeSummary;
   runtime_lifecycle: RuntimeEvent[];
@@ -375,10 +376,16 @@ export interface DeveloperTrace {
   reasoning_graph?: ReasoningGraph;
 }
 
+export interface ConfidenceSummary {
+  score: number;
+  band: PCAState['confidence'];
+}
+
 export interface ReportLayers {
   user_report: UserReport;
   analyst_report: AnalystReport;
-  developer_trace: DeveloperTrace;
+  system_trace: SystemTrace;
+  confidence_summary: ConfidenceSummary;
 }
 
 // ─── Stage metadata ───────────────────────────────────────────────────────────
@@ -644,7 +651,7 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="logo-flame">🔥</div>
   <div class="logo-text">
     <div class="logo-title">FIRE KEEPER</div>
-   <div class="logo-sub">FIRE KEEPER OS — User Report · Analyst Report · Developer Trace</div>
+   <div class="logo-sub">FIRE KEEPER OS — User Report · Analyst Report · System Trace</div>
   </div>
 </div>
 
@@ -655,12 +662,13 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="meta-item"><span class="meta-lbl">เวลารวม:</span><span class="meta-val">${totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs + ' ms'}</span></div>
   <div class="meta-item"><span class="meta-lbl">ขั้นตอน:</span><span class="meta-val">${pca.trace.length} stages</span></div>
   <div class="meta-item"><span class="meta-lbl">Intent:</span><span class="meta-val">${escHtml(pca.intent?.type ?? 'general')} / ${escHtml(pca.intent?.pipeline ?? 'general')}</span></div>
-  <div class="meta-item"><span class="meta-lbl">ความมั่นใจ:</span><span class="cbadge ${confClass}">${pca.confidence}</span></div>
+  <div class="meta-item"><span class="meta-lbl">ความมั่นใจ:</span><span class="cbadge ${confClass}">${pca.confidence} · ${(pca.confidence_report?.score ?? 0).toFixed(1)}/100</span></div>
 </div>
 
 <!-- USER REPORT -->
 <div class="section">
   <div class="sec-title">👤 User Report — รายงานสำหรับผู้ใช้</div>
+  <div class="question-box"><strong>Executive Summary</strong><br>${escHtml(answer.length > 240 ? `${answer.slice(0, 237).trimEnd()}...` : answer)}</div>
   <div class="answer-box">${escHtml(answer)}</div>
   <div class="score-box">
     <span class="score-chip">intent: ${escHtml(pca.intent?.type ?? 'general')}</span>
@@ -694,9 +702,9 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="question-box">${escHtml(question)}</div>
 </div>
 
-<!-- DEVELOPER TRACE -->
+<!-- SYSTEM TRACE -->
 <div class="section">
-  <div class="sec-title">🛠 Developer Trace — lifecycle, runtime และ dataflow</div>
+  <div class="sec-title">🛠 System Trace — lifecycle, runtime และ dataflow</div>
 </div>
 
 <!-- PCA TIMELINE -->
@@ -993,6 +1001,18 @@ function renderInlineMarkdown(text: string, baseStyle: object, boldStyle: object
   });
 }
 
+function confidenceStatus(band: PCAState['confidence']): { icon: string; color: string } {
+  if (band === 'สูง') return { icon: '🟢', color: '#22c55e' };
+  if (band === 'ต่ำ') return { icon: '🔴', color: '#ef4444' };
+  return { icon: '🟡', color: '#eab308' };
+}
+
+function auditStatus(status?: VerificationReport['status']): { icon: string; color: string } {
+  return status === 'ผ่าน'
+    ? { icon: '🟢', color: '#22c55e' }
+    : { icon: '🟡', color: '#eab308' };
+}
+
 interface MessageBubbleProps {
   message: Message;
 }
@@ -1023,8 +1043,18 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [showPCA, setShowPCA] = useState(false);
-  const [reportTab, setReportTab] = useState<'user' | 'analyst' | 'developer'>('user');
+  const [reportTab, setReportTab] = useState<'user' | 'analyst' | 'system'>('user');
   const reports = message.reports;
+  const reportConfidence = reports?.confidence_summary ?? (
+    message.pcaState?.confidence_report
+      ? {
+          score: message.pcaState.confidence_report.score,
+          band: message.pcaState.confidence,
+        }
+      : undefined
+  );
+  const confidenceIndicator = confidenceStatus(reportConfidence?.band ?? 'ไม่สามารถประเมินได้');
+  const confidenceScore = Math.max(0, Math.min(100, reportConfidence?.score ?? 0));
 
   const sections = useMemo(() => {
     if (isUser) return null;
@@ -1120,9 +1150,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     }
 
     if (message.reports) {
-      const { user_report, analyst_report, developer_trace } = message.reports;
+      const { user_report, analyst_report, system_trace, confidence_summary } = message.reports;
       content += `=== USER REPORT — รายงานสำหรับผู้ใช้ ===\n`;
       content += `${user_report.answer}\n`;
+      content += `Executive Summary: ${user_report.executive_summary}\n`;
       content += `ประเภทคำถาม: ${user_report.route?.type ?? 'general'}\n`;
       content += `ความมั่นใจ: ${user_report.confidence}\n`;
       if (user_report.limitations.length > 0) {
@@ -1141,12 +1172,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         content += `Decision Matrix: ${analyst_report.decision_matrix.selected_option}\n`;
       }
 
-      content += `\n=== DEVELOPER TRACE — รายละเอียดระบบ ===\n`;
-      content += `Trace stages: ${developer_trace.trace.length}\n`;
-      content += `Dataflow edges: ${developer_trace.dataflow.length}\n`;
-      content += `Lifecycle events: ${developer_trace.runtime_lifecycle.length}\n`;
-      content += `Module audits: ${developer_trace.module_audit.length}\n`;
-      content += `State transitions: ${developer_trace.state_transitions.length}\n`;
+      content += `Confidence: ${confidence_summary.score.toFixed(1)}/100 (${confidence_summary.band})\n`;
+      content += `\n=== SYSTEM TRACE — รายละเอียดระบบ ===\n`;
+      content += `Trace stages: ${system_trace.trace.length}\n`;
+      content += `Dataflow edges: ${system_trace.dataflow.length}\n`;
+      content += `Lifecycle events: ${system_trace.runtime_lifecycle.length}\n`;
+      content += `Module audits: ${system_trace.module_audit.length}\n`;
+      content += `State transitions: ${system_trace.state_transitions.length}\n`;
     } else {
       content += `=== คำตอบ ===\n${message.content}\n`;
       if (message.pcaState) {
@@ -1259,25 +1291,42 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           {message.pcaState && (
             <Pressable onPress={() => setShowPCA(!showPCA)} style={styles.pcaToggle}>
               <Text style={styles.pcaToggleText}>
-                {showPCA ? '▲ ซ่อนรายงานและ trace' : '▼ เปิดรายงานและ trace'}
+                {showPCA ? '▲ ซ่อนรายงานและ System Trace' : '▼ เปิดรายงานและ System Trace'}
               </Text>
               <Text style={[
                 styles.pcaConfidence,
-                message.pcaState.confidence === 'สูง' && { color: '#22c55e' },
-                message.pcaState.confidence === 'ต่ำ' && { color: '#f97316' },
-                message.pcaState.confidence === 'ไม่สามารถประเมินได้' && { color: '#94a3b8' },
+                { color: confidenceIndicator.color },
               ]}>
-                ความมั่นใจ: {message.pcaState.confidence}
+                {confidenceIndicator.icon} {confidenceScore.toFixed(1)}/100 · {reportConfidence?.band ?? message.pcaState.confidence}
               </Text>
             </Pressable>
           )}
           {showPCA && reports && (
             <View style={styles.reportPanel}>
+              <View style={styles.confidencePanel}>
+                <View style={styles.confidenceHeader}>
+                  <Text style={styles.confidenceTitle}>Confidence</Text>
+                  <Text style={[styles.confidenceScore, { color: confidenceIndicator.color }]}>
+                    {confidenceIndicator.icon} {confidenceScore.toFixed(1)}/100
+                  </Text>
+                </View>
+                <View style={styles.confidenceTrack}>
+                  <View
+                    style={[
+                      styles.confidenceFill,
+                      { width: `${confidenceScore}%`, backgroundColor: confidenceIndicator.color },
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.confidenceBand, { color: confidenceIndicator.color }]}>
+                  {reportConfidence?.band ?? 'ไม่สามารถประเมินได้'}
+                </Text>
+              </View>
               <View style={styles.reportTabs}>
                 {([
                   ['user', '👤 ผู้ใช้'],
                   ['analyst', '🔎 นักวิเคราะห์'],
-                  ['developer', '🛠 Developer'],
+                  ['system', '🛠 System Trace'],
                 ] as const).map(([tab, label]) => (
                   <Pressable
                     key={tab}
@@ -1301,13 +1350,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <View style={styles.reportSection}>
                   <Text style={styles.reportSectionTitle}>User Report</Text>
                   <Text style={styles.reportSectionHint}>สรุปสำหรับการอ่านและตัดสินใจของคุณ</Text>
+                  <View style={styles.executiveSummary}>
+                    <Text style={styles.executiveSummaryLabel}>Executive Summary</Text>
+                    <Text style={styles.executiveSummaryText}>{reports.user_report.executive_summary}</Text>
+                  </View>
                   <View style={styles.reportMetricRow}>
                     <Text style={styles.reportMetricLabel}>ประเภทคำถาม</Text>
                     <Text style={styles.reportMetricValue}>{reports.user_report.route?.type ?? 'general'}</Text>
-                  </View>
-                  <View style={styles.reportMetricRow}>
-                    <Text style={styles.reportMetricLabel}>ความมั่นใจ</Text>
-                    <Text style={styles.reportMetricValue}>{reports.user_report.confidence}</Text>
                   </View>
                   {reports.user_report.limitations.length > 0 && (
                     <View style={styles.reportCallout}>
@@ -1330,6 +1379,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <View style={styles.reportSection}>
                   <Text style={styles.reportSectionTitle}>Analyst Report</Text>
                   <Text style={styles.reportSectionHint}>หลักฐาน เหตุผล และผล audit หลังคำตอบ</Text>
+                  <Text style={styles.reportGroupTitle}>1. Evidence</Text>
                   <View style={styles.reportMetricGrid}>
                     <View style={styles.reportMetricTile}>
                       <Text style={styles.reportMetricNumber}>{reports.analyst_report.evidence_report?.items.length ?? 0}</Text>
@@ -1348,24 +1398,23 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                       <Text style={styles.reportMetricLabel}>ข้อมูลขาด</Text>
                     </View>
                   </View>
-                  {reports.analyst_report.confidence_report && (
+                  {reports.analyst_report.evidence_report && (
                     <View style={styles.reportCallout}>
-                      <Text style={styles.reportCalloutTitle}>
-                        Confidence {reports.analyst_report.confidence_report.score.toFixed(1)}/100
-                      </Text>
+                      <Text style={styles.reportCalloutTitle}>Evidence Matrix</Text>
                       <Text style={styles.reportBodyText}>
-                        Evidence {(reports.analyst_report.confidence_report.components.evidence_quality ?? 0).toFixed(3)}
-                        {' · '}Verification {(reports.analyst_report.confidence_report.verification_score * 100).toFixed(1)}%
+                        aggregate {reports.analyst_report.evidence_report.aggregate_score.toFixed(3)}
+                        {' · '}coverage {reports.analyst_report.evidence_report.coverage_score.toFixed(3)}
                       </Text>
                     </View>
                   )}
-                  {reports.analyst_report.verification && (
+                  <Text style={styles.reportGroupTitle}>2. Reasoning</Text>
+                  {reports.analyst_report.reasoning_quality && (
                     <View style={styles.reportCallout}>
-                      <Text style={styles.reportCalloutTitle}>
-                        Audit: {reports.analyst_report.verification.status}
-                      </Text>
+                      <Text style={styles.reportCalloutTitle}>Reasoning Quality</Text>
                       <Text style={styles.reportBodyText}>
-                        {reports.analyst_report.verification.consistency} · score {((reports.analyst_report.verification.score ?? 0) * 100).toFixed(1)}%
+                        evidence {reports.analyst_report.reasoning_quality.evidence_count}
+                        {' · '}quality {reports.analyst_report.reasoning_quality.evidence_quality.toFixed(3)}
+                        {' · '}unsupported {reports.analyst_report.reasoning_quality.unsupported_claim_count}
                       </Text>
                     </View>
                   )}
@@ -1377,50 +1426,74 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                       ))}
                     </View>
                   )}
-                  {reports.analyst_report.decision_matrix && reports.analyst_report.decision_matrix.options.length > 0 && (
+                  <Text style={styles.reportGroupTitle}>3. Decision</Text>
+                  {reports.analyst_report.decision_matrix && reports.analyst_report.decision_matrix.options.length > 0 ? (
                     <View style={styles.reportCallout}>
                       <Text style={styles.reportCalloutTitle}>Decision Matrix</Text>
+                      <Text style={styles.reportBodyText}>
+                        เลือก: {reports.analyst_report.decision_matrix.selected_option}
+                        {' · '}score {reports.analyst_report.decision_matrix.selected_score.toFixed(3)}
+                      </Text>
                       <Text style={styles.reportBodyText}>{reports.analyst_report.decision_matrix.selection_reason}</Text>
                     </View>
+                  ) : (
+                    <Text style={styles.reportBodyText}>คำถามนี้ไม่ใช่เส้นทางการตัดสินใจ</Text>
+                  )}
+                  <Text style={styles.reportGroupTitle}>4. Verification</Text>
+                  {reports.analyst_report.verification && (
+                    <View style={styles.reportCallout}>
+                      <Text style={styles.reportCalloutTitle}>
+                        {auditStatus(reports.analyst_report.verification.status).icon}{' '}
+                        Audit: {reports.analyst_report.verification.status}
+                      </Text>
+                      <Text style={styles.reportBodyText}>
+                        {reports.analyst_report.verification.consistency} · score {((reports.analyst_report.verification.score ?? 0) * 100).toFixed(1)}%
+                      </Text>
+                    </View>
+                  )}
+                  {reports.analyst_report.logical_verification && (
+                    <Text style={styles.reportBodyText}>
+                      {auditStatus(reports.analyst_report.logical_verification.status).icon} Logical verification: {reports.analyst_report.logical_verification.status}
+                    </Text>
                   )}
                 </View>
               )}
 
-              {reportTab === 'developer' && (
+              {reportTab === 'system' && (
                 <View style={styles.reportSection}>
-                  <Text style={styles.reportSectionTitle}>Developer Trace</Text>
+                  <Text style={styles.reportSectionTitle}>System Trace</Text>
                   <Text style={styles.reportSectionHint}>รายละเอียดการทำงานสำหรับ debug และพัฒนาระบบ</Text>
-                  {reports.developer_trace.runtime_summary && (
+                  {reports.system_trace.runtime_summary && (
                     <View style={styles.reportCallout}>
                       <Text style={styles.reportCalloutTitle}>Runtime</Text>
                       <Text style={styles.reportBodyText}>
-                        Total {reports.developer_trace.runtime_summary.cognitive.total_ms.toFixed(1)}ms
-                        {' · '}LLM {reports.developer_trace.runtime_summary.llm.request_ms.toFixed(1)}ms
+                        Total {reports.system_trace.runtime_summary.cognitive.total_ms.toFixed(1)}ms
+                        {' · '}LLM {reports.system_trace.runtime_summary.llm.request_ms.toFixed(1)}ms
                       </Text>
                       <Text style={styles.reportBodyText}>
-                        {reports.developer_trace.trace.length} trace stages · {reports.developer_trace.dataflow.length} dataflow edges
+                        {reports.system_trace.trace.length} trace stages · {reports.system_trace.dataflow.length} dataflow edges
                       </Text>
                     </View>
                   )}
                   <View style={styles.reportMetricGrid}>
                     <View style={styles.reportMetricTile}>
-                      <Text style={styles.reportMetricNumber}>{reports.developer_trace.module_audit.length}</Text>
+                      <Text style={styles.reportMetricNumber}>{reports.system_trace.module_audit.length}</Text>
                       <Text style={styles.reportMetricLabel}>โมดูล audit</Text>
                     </View>
                     <View style={styles.reportMetricTile}>
-                      <Text style={styles.reportMetricNumber}>{reports.developer_trace.runtime_metrics.length}</Text>
+                      <Text style={styles.reportMetricNumber}>{reports.system_trace.runtime_metrics.length}</Text>
                       <Text style={styles.reportMetricLabel}>metrics</Text>
                     </View>
                     <View style={styles.reportMetricTile}>
-                      <Text style={styles.reportMetricNumber}>{reports.developer_trace.state_transitions.length}</Text>
+                      <Text style={styles.reportMetricNumber}>{reports.system_trace.state_transitions.length}</Text>
                       <Text style={styles.reportMetricLabel}>transitions</Text>
                     </View>
                     <View style={styles.reportMetricTile}>
-                      <Text style={styles.reportMetricNumber}>{reports.developer_trace.runtime_lifecycle.length}</Text>
+                      <Text style={styles.reportMetricNumber}>{reports.system_trace.runtime_lifecycle.length}</Text>
                       <Text style={styles.reportMetricLabel}>lifecycle</Text>
                     </View>
                   </View>
-                  {reports.developer_trace.notes.slice(-3).map((note, index) => (
+                  {reports.system_trace.notes.slice(-3).map((note, index) => (
                     <Text key={`developer-note-${index}`} style={styles.reportBodyText}>• {note}</Text>
                   ))}
                 </View>
@@ -1907,6 +1980,43 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontFamily: 'Inter_600SemiBold',
       fontWeight: '600' as const,
     },
+    confidencePanel: {
+      backgroundColor: colors.card,
+      borderRadius: 8,
+      padding: 9,
+      marginBottom: 8,
+      gap: 5,
+    },
+    confidenceHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+    confidenceTitle: {
+      color: colors.foreground,
+      fontSize: 11,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    confidenceScore: {
+      fontSize: 12,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    confidenceTrack: {
+      height: 7,
+      borderRadius: 4,
+      overflow: 'hidden',
+      backgroundColor: colors.border,
+    },
+    confidenceFill: {
+      height: '100%',
+      borderRadius: 4,
+    },
+    confidenceBand: {
+      fontSize: 10,
+      fontFamily: 'Inter_500Medium',
+    },
     pcaMeta: {
       marginTop: 8,
       backgroundColor: colors.muted,
@@ -1964,6 +2074,35 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontSize: 10,
       fontFamily: 'Inter_400Regular',
       marginBottom: 3,
+    },
+    executiveSummary: {
+      backgroundColor: colors.primary + '18',
+      borderLeftWidth: 3,
+      borderLeftColor: colors.primary,
+      borderRadius: 7,
+      padding: 8,
+      gap: 3,
+      marginBottom: 2,
+    },
+    executiveSummaryLabel: {
+      color: colors.primary,
+      fontSize: 10,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    executiveSummaryText: {
+      color: colors.foreground,
+      fontSize: 11,
+      lineHeight: 16,
+      fontFamily: 'Inter_400Regular',
+    },
+    reportGroupTitle: {
+      color: colors.foreground,
+      fontSize: 11,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+      marginTop: 5,
+      marginBottom: 1,
     },
     reportMetricRow: {
       flexDirection: 'row',

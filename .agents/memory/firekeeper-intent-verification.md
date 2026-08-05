@@ -21,7 +21,7 @@ User-facing answers must be normalized separately from PCA audit output: non-dec
 
 **How to apply:** Lock the natural-language answer first, then audit it without rewriting or blocking it; remove internal PCA headings and citation placeholders from user-facing text while retaining the full audit in state and exports.
 
-Firekeeper OS reports are intentionally separated into User Report, Analyst Report, and Developer Trace; decision matrices and audit details belong to Analyst Report, while runtime lineage belongs only to Developer Trace.
+Firekeeper OS reports are intentionally separated into User Report, Analyst Report, and System Trace; decision matrices and audit details belong to Analyst Report, while runtime lineage belongs only to System Trace.
 
 **Why:** Mixing the normal answer with audit cards made the mobile response repetitive and exposed implementation detail to users.
 

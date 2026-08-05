@@ -335,6 +335,7 @@ export interface PCAState {
 
 export interface UserReport {
   answer: string;
+  executive_summary: string;
   route: IntentRoute;
   confidence: PCAState["confidence"];
   limitations: string[];
@@ -353,7 +354,7 @@ export interface AnalystReport {
   decision_matrix?: DecisionMatrix;
 }
 
-export interface DeveloperTrace {
+export interface SystemTrace {
   notes: string[];
   runtime_summary: RuntimeSummary;
   runtime_lifecycle: RuntimeEvent[];
@@ -365,10 +366,28 @@ export interface DeveloperTrace {
   reasoning_graph: ReasoningGraph;
 }
 
+export interface ConfidenceSummary {
+  score: number;
+  band: PCAState["confidence"];
+}
+
 export interface ReportLayers {
   user_report: UserReport;
   analyst_report: AnalystReport;
-  developer_trace: DeveloperTrace;
+  system_trace: SystemTrace;
+  confidence_summary: ConfidenceSummary;
+}
+
+function buildExecutiveSummary(answer: string): string {
+  const lines = answer
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?。！？])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const summary = (lines.length > 0 ? lines : [answer.trim()]).join(" ");
+  if (summary.length <= 240) return summary;
+  return `${summary.slice(0, 237).trimEnd()}...`;
 }
 
 export function buildReportLayers(state: PCAState): ReportLayers {
@@ -378,6 +397,7 @@ export function buildReportLayers(state: PCAState): ReportLayers {
   return {
     user_report: {
       answer: state.response,
+      executive_summary: buildExecutiveSummary(state.response),
       route: state.intent,
       confidence: state.confidence,
       limitations: state.missing_info.slice(0, 3),
@@ -396,7 +416,7 @@ export function buildReportLayers(state: PCAState): ReportLayers {
       reasoning_quality: state.reasoning_quality,
       ...(state.intent.type === "decision" ? { decision_matrix: state.decision_matrix } : {}),
     },
-    developer_trace: {
+    system_trace: {
       notes: state.notes,
       runtime_summary: state.runtime_summary,
       runtime_lifecycle: state.runtime_lifecycle,
@@ -406,6 +426,10 @@ export function buildReportLayers(state: PCAState): ReportLayers {
       module_audit: state.module_audit,
       state_transitions: state.state_transitions,
       reasoning_graph: state.reasoning_graph,
+    },
+    confidence_summary: {
+      score: state.confidence_report.score,
+      band: state.confidence,
     },
   };
 }

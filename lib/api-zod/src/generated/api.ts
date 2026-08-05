@@ -52,6 +52,7 @@ export const AnalyzeQuestionResponse = zod.object({
   "reports": zod.object({
   "user_report": zod.object({
   "answer": zod.string(),
+  "executive_summary": zod.string(),
   "route": zod.object({
   "type": zod.enum(['explanatory', 'decision', 'summary', 'comparison', 'general']),
   "confidence": zod.number(),
@@ -143,7 +144,7 @@ export const AnalyzeQuestionResponse = zod.object({
   "selection_reason": zod.string()
 }).optional()
 }),
-  "developer_trace": zod.object({
+  "system_trace": zod.object({
   "notes": zod.array(zod.string()),
   "runtime_summary": zod.object({
   "cognitive": zod.object({
@@ -238,6 +239,10 @@ export const AnalyzeQuestionResponse = zod.object({
   "unsupported_claim_count": zod.number(),
   "methodology": zod.string()
 })
+}),
+  "confidence_summary": zod.object({
+  "score": zod.number(),
+  "band": zod.enum(['สูง', 'ปานกลาง', 'ต่ำ', 'ไม่สามารถประเมินได้'])
 })
 }),
   "pcaState": zod.object({

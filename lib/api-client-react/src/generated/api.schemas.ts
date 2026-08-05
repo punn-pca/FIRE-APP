@@ -433,6 +433,7 @@ export const UserReportConfidence = {
 
 export interface UserReport {
   answer: string;
+  executive_summary: string;
   route: IntentRoute;
   confidence: UserReportConfidence;
   limitations: string[];
@@ -455,15 +456,15 @@ export interface AnalystReport {
   decision_matrix?: DecisionMatrix;
 }
 
-export type DeveloperTraceRuntimeLifecycleItem = { [key: string]: unknown };
+export type SystemTraceRuntimeLifecycleItem = { [key: string]: unknown };
 
-export type DeveloperTraceTraceItem = { [key: string]: unknown };
+export type SystemTraceTraceItem = { [key: string]: unknown };
 
-export interface DeveloperTrace {
+export interface SystemTrace {
   notes: string[];
   runtime_summary: RuntimeSummary;
-  runtime_lifecycle: DeveloperTraceRuntimeLifecycleItem[];
-  trace: DeveloperTraceTraceItem[];
+  runtime_lifecycle: SystemTraceRuntimeLifecycleItem[];
+  trace: SystemTraceTraceItem[];
   dataflow: DataflowEdge[];
   runtime_metrics: ModuleRuntimeMetric[];
   module_audit: ModuleAudit[];
@@ -471,10 +472,26 @@ export interface DeveloperTrace {
   reasoning_graph: ReasoningGraph;
 }
 
+export type ReportLayersConfidenceSummaryBand = typeof ReportLayersConfidenceSummaryBand[keyof typeof ReportLayersConfidenceSummaryBand];
+
+
+export const ReportLayersConfidenceSummaryBand = {
+  สูง: 'สูง',
+  ปานกลาง: 'ปานกลาง',
+  ต่ำ: 'ต่ำ',
+  ไม่สามารถประเมินได้: 'ไม่สามารถประเมินได้',
+} as const;
+
+export type ReportLayersConfidenceSummary = {
+  score: number;
+  band: ReportLayersConfidenceSummaryBand;
+};
+
 export interface ReportLayers {
   user_report: UserReport;
   analyst_report: AnalystReport;
-  developer_trace: DeveloperTrace;
+  system_trace: SystemTrace;
+  confidence_summary: ReportLayersConfidenceSummary;
 }
 
 export interface AnalyzeResponse {

@@ -369,11 +369,12 @@ components:
       type: object
       properties:
         answer: { type: string }
+        executive_summary: { type: string }
         route: { $ref: "#/components/schemas/IntentRoute" }
         confidence: { type: string, enum: [สูง, ปานกลาง, ต่ำ, ไม่สามารถประเมินได้] }
         limitations: { type: array, items: { type: string } }
         next_step: { type: string }
-      required: [answer, route, confidence, limitations]
+      required: [answer, executive_summary, route, confidence, limitations]
     AnalystReport:
       type: object
       properties:
@@ -387,7 +388,7 @@ components:
         reasoning_quality: { $ref: "#/components/schemas/ReasoningQualityMetrics" }
         decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
       required: [evidence_report, knowledge_map, missing_info, conflicts, confidence_report, verification, logical_verification, reasoning_quality]
-    DeveloperTrace:
+    SystemTrace:
       type: object
       properties:
         notes: { type: array, items: { type: string } }
@@ -405,8 +406,14 @@ components:
       properties:
         user_report: { $ref: "#/components/schemas/UserReport" }
         analyst_report: { $ref: "#/components/schemas/AnalystReport" }
-        developer_trace: { $ref: "#/components/schemas/DeveloperTrace" }
-      required: [user_report, analyst_report, developer_trace]
+        system_trace: { $ref: "#/components/schemas/SystemTrace" }
+        confidence_summary:
+          type: object
+          properties:
+            score: { type: number }
+            band: { type: string, enum: [สูง, ปานกลาง, ต่ำ, ไม่สามารถประเมินได้] }
+          required: [score, band]
+      required: [user_report, analyst_report, system_trace, confidence_summary]
     AnalyzeResponse:
       type: object
       properties:

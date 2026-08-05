@@ -10,6 +10,7 @@ import type { UserReportConfidence } from './userReportConfidence';
 
 export interface UserReport {
   answer: string;
+  executive_summary: string;
   route: IntentRoute;
   confidence: UserReportConfidence;
   limitations: string[];
