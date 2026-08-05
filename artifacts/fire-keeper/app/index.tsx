@@ -14,9 +14,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
 import { fetch } from 'expo/fetch';
 import { useColors } from '@/hooks/useColors';
-import MessageBubble, { type Message, type PCAState } from '@/components/MessageBubble';
+import MessageBubble, {
+  formatThaiClock,
+  formatThaiDateTime,
+  formatThaiFileStamp,
+  type Message,
+  type PCAState,
+} from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
 import PCAProgress from '@/components/PCAProgress';
 
@@ -167,28 +174,44 @@ export default function ChatScreen() {
   }, []);
 
   const handleExportAll = useCallback(async () => {
-    const timestamp = new Date().toLocaleString('th-TH');
-    let content = `=== FIRE KEEPER — PUNN PCA Session Export ===\nวันที่ส่งออก: ${timestamp}\n`;
+    const timestamp = formatThaiDateTime();
+    let content = `=== FIRE KEEPER — PUNN PCA Session Export ===\nวันที่ส่งออก (เวลาไทย): ${timestamp}\n`;
     content += `โทน: ${tone} | Deep Reasoning: ${deepReasoning ? 'เปิด' : 'ปิด'}\n`;
     content += `${'═'.repeat(60)}\n\n`;
 
     messages.forEach((msg) => {
       const role = msg.role === 'user' ? '👤 ผู้ใช้' : '🔥 FIRE KEEPER';
       const time = msg.timestamp
-        ? new Date(msg.timestamp).toLocaleTimeString('th-TH')
+        ? formatThaiClock(msg.timestamp)
         : '';
       content += `${role} [${time}]\n${msg.content}\n\n`;
     });
 
     try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share({ text: content, title: 'FIRE KEEPER Session' });
+      const filename = `FIRE_KEEPER_Session_${formatThaiFileStamp()}.txt`;
+      if (Platform.OS === 'web') {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
         return;
       }
-      await Share.share({ message: content, title: 'FIRE KEEPER Session' });
+
+      const baseDirectory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+      if (!baseDirectory) throw new Error('ไม่พบพื้นที่บันทึกไฟล์ในอุปกรณ์');
+      const uri = `${baseDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, content, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      await Share.share({ url: uri, message: uri, title: filename });
     } catch (_err) {
       await Clipboard.setStringAsync(content);
-      Alert.alert('คัดลอกแล้ว', 'คัดลอกการสนทนาทั้งหมดไปยังคลิปบอร์ดแล้วครับ');
+      Alert.alert('บันทึกไฟล์ไม่สำเร็จ', 'คัดลอกการสนทนาไปยังคลิปบอร์ดแล้วครับ');
     }
   }, [messages, tone, deepReasoning]);
 

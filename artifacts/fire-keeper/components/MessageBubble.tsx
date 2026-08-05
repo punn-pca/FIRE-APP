@@ -10,8 +10,53 @@ import {
   Alert,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
+
+const THAI_TIME_ZONE = 'Asia/Bangkok';
+
+function thaiDate(value?: string | number): Date {
+  return value == null ? new Date() : new Date(value);
+}
+
+export function formatThaiDateTime(value?: string | number): string {
+  return thaiDate(value).toLocaleString('th-TH', {
+    timeZone: THAI_TIME_ZONE,
+    dateStyle: 'full',
+    timeStyle: 'medium',
+  });
+}
+
+export function formatThaiClock(value?: string | number): string {
+  const date = thaiDate(value);
+  const parts = new Intl.DateTimeFormat('th-TH', {
+    timeZone: THAI_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '00';
+  return `${get('hour')}:${get('minute')}:${get('second')}.${String(date.getUTCMilliseconds()).padStart(3, '0')}`;
+}
+
+export function formatThaiFileStamp(value?: string | number): string {
+  const date = thaiDate(value);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: THAI_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '00';
+  return `${get('year')}${get('month')}${get('day')}_${get('hour')}${get('minute')}${get('second')}`;
+}
 
 export interface TraceEntry {
   stage: string;
@@ -311,9 +356,7 @@ const STAGE_INFO: Record<string, { icon: string; th: string; en: string; desc: s
 function generateHtmlReport(question: string, answer: string, pca: PCAState): string {
   const totalMs = pca.execution_time_ms ?? 0;
   const maxMs = Math.max(...pca.trace.map((t) => t.duration_ms ?? 0), 1);
-  const dateStr = pca.start_time
-    ? new Date(pca.start_time).toLocaleString('th-TH', { dateStyle: 'full', timeStyle: 'medium' })
-    : new Date().toLocaleString('th-TH');
+  const dateStr = formatThaiDateTime(pca.start_time);
 
   const confClass =
     pca.confidence === 'สูง' ? 'conf-high'
@@ -329,7 +372,7 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
     const barColor = ms >= 2000 ? '#dc2626' : ms >= 500 ? '#f59e0b' : ms >= 100 ? '#22d3ee' : '#22c55e';
     const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(3)} ms`;
     const ts = entry.started_at
-      ? `${new Date(entry.started_at).toISOString().slice(11, 23)}–${new Date(entry.ended_at ?? entry.started_at).toISOString().slice(11, 23)}`
+      ? `${formatThaiClock(entry.started_at)}–${formatThaiClock(entry.ended_at ?? entry.started_at)}`
       : '';
     const measurement = entry.measured === false ? 'phase marker' : 'runtime measured';
     return `
@@ -353,7 +396,7 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
       <td class="c-name"><span class="name-th">${escHtml(event.phase)}</span></td>
       <td class="c-desc">${escHtml(event.action)}</td>
       <td class="c-ms">${event.measured === false ? '—' : `${(event.duration_ms ?? 0).toFixed(3)} ms`}<br><span class="measurement">${event.measured === false ? 'phase marker' : 'runtime measured'}</span></td>
-      <td class="c-ts">${event.started_at ? `${new Date(event.started_at).toISOString().slice(11, 23)}–${new Date(event.ended_at ?? event.started_at).toISOString().slice(11, 23)}` : ''}</td>
+      <td class="c-ts">${event.started_at ? `${formatThaiClock(event.started_at)}–${formatThaiClock(event.ended_at ?? event.started_at)}` : ''}</td>
     </tr>`).join('');
   const governanceItems = (pca.governance?.safety_checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const verificationItems = (pca.verification?.checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
@@ -884,11 +927,23 @@ interface MessageBubbleProps {
 }
 
 async function shareAsFile(content: string, filename: string) {
-  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.share) {
-    await navigator.share({ text: content, title: filename });
+  if (Platform.OS === 'web') {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
     return;
   }
-  await Share.share({ message: content, title: filename });
+  const baseDirectory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+  if (!baseDirectory) throw new Error('ไม่พบพื้นที่บันทึกไฟล์ในอุปกรณ์');
+  const uri = `${baseDirectory}${filename}`;
+  await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
+  await Share.share({ url: uri, message: uri, title: filename });
 }
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
@@ -927,30 +982,59 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     const html = generateHtmlReport(question, message.content, message.pcaState);
 
     if (Platform.OS === 'web') {
-      // Web: trigger a real file download
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `FIRE_KEEPER_Report_${Date.now()}.html`;
+      a.download = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else {
-      // Native: share the HTML text so the user can save to Files and open in browser
       try {
-        await Share.share({ message: html, title: 'FIRE KEEPER PCA Report' });
+        await shareAsFile(
+          html,
+          `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`
+        );
       } catch {
         await Clipboard.setStringAsync(html);
-        Alert.alert('คัดลอกแล้ว', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว เปิดในเบราว์เซอร์เพื่อพิมพ์ได้เลยครับ');
+        Alert.alert('บันทึกไม่สำเร็จ', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว สามารถวางในไฟล์ .html ได้ครับ');
       }
     }
   }, [message]);
 
+  const handleExportPdf = useCallback(async () => {
+    if (!message.pcaState) return;
+    const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
+    const html = generateHtmlReport(question, message.content, message.pcaState);
+    const filename = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.pdf`;
+
+    try {
+      if (Platform.OS === 'web') {
+        await Print.printAsync({ html });
+        return;
+      }
+
+      const pdf = await Print.printToFileAsync({
+        html,
+        width: 794,
+        height: 1123,
+        margins: { top: 24, right: 24, bottom: 24, left: 24 },
+      });
+      const baseDirectory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+      if (!baseDirectory) throw new Error('ไม่พบพื้นที่บันทึกไฟล์ในอุปกรณ์');
+      const destination = `${baseDirectory}${filename}`;
+      await FileSystem.copyAsync({ from: pdf.uri, to: destination });
+      await Share.share({ url: destination, message: destination, title: filename });
+    } catch {
+      Alert.alert('สร้าง PDF ไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง หรือใช้ปุ่ม HTML แล้วเลือกพิมพ์เป็น PDF');
+    }
+  }, [message]);
+
   const handleShare = useCallback(async () => {
-    const timestamp = new Date().toLocaleString('th-TH');
-    const filename = `FIRE_KEEPER_${Date.now()}.txt`;
+    const timestamp = formatThaiDateTime();
+    const filename = `FIRE_KEEPER_${formatThaiFileStamp()}.txt`;
     let content = `=== FIRE KEEPER — PUNN PCA Analysis ===\nวันที่: ${timestamp}\n\n`;
 
     if (message.pcaState) {
@@ -1359,14 +1443,22 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <Text style={styles.pcaMetaLabel}>บริบท: </Text>
                 {message.pcaState.understanding}
               </Text>
-              {/* Export HTML button */}
-              <Pressable
-                onPress={handleExportHtml}
-                style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
-              >
-                <Ionicons name="document-outline" size={13} color="#f97316" />
-                <Text style={styles.exportHtmlLabel}>ส่งออก HTML (พิมพ์ได้ · A4)</Text>
-              </Pressable>
+              <View style={styles.exportRow}>
+                <Pressable
+                  onPress={handleExportHtml}
+                  style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
+                >
+                  <Ionicons name="logo-html5" size={13} color="#f97316" />
+                  <Text style={styles.exportHtmlLabel}>บันทึก HTML</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleExportPdf}
+                  style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
+                >
+                  <Ionicons name="document-text-outline" size={13} color="#dc2626" />
+                  <Text style={styles.exportPdfLabel}>บันทึก PDF</Text>
+                </Pressable>
+              </View>
             </View>
           )}
 
@@ -1628,11 +1720,16 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderColor: colors.border,
       gap: 3,
     },
+    exportRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 10,
+    },
     exportHtmlBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 5,
-      marginTop: 10,
       paddingVertical: 7,
       paddingHorizontal: 12,
       borderRadius: 8,
@@ -1642,6 +1739,23 @@ function createStyles(colors: ReturnType<typeof useColors>) {
     },
     exportHtmlLabel: {
       color: '#f97316',
+      fontSize: 12,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    exportPdfBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: '#dc2626',
+      alignSelf: 'flex-start',
+    },
+    exportPdfLabel: {
+      color: '#dc2626',
       fontSize: 12,
       fontFamily: 'Inter_600SemiBold',
       fontWeight: '600' as const,
