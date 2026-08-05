@@ -14,3 +14,9 @@ Independent cognitive modules must emit auditable computation metadata, not only
 **Why:** A timestamped pipeline alone proves orchestration but not independent reasoning. Exposing the inputs, method, intermediate scores, and pass/fail evidence makes the architecture inspectable for engineering and research use.
 
 **How to apply:** Every new module should have a deterministic or explicitly identified algorithm, structured output in the API contract, client visibility, printable-report visibility where relevant, and regression coverage for both positive and negative cases.
+
+Auditable metadata is not sufficient if it is only post-hoc: evidence, decision, and verification outputs must be injected into generation and enforce a retry, block, or explicit insufficient-evidence fallback when required checks fail.
+
+**Why:** A review found that a model can produce an answer independently of the computed audit artifacts, while keyword-only verification can still raise confidence. That creates explainability without causal control.
+
+**How to apply:** Treat module outputs as control inputs to the communication stage, verify substantive grounding rather than keyword presence, and test route-level influence—not only pure helper functions.
