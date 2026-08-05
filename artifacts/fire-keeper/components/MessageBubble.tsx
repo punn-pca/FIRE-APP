@@ -97,7 +97,7 @@ export interface VerificationReport {
 
 export interface EvidenceItem {
   id: string;
-  source: 'user_input' | 'conversation_history' | 'memory';
+  source: 'user_input' | 'conversation_history' | 'memory' | 'knowledge_base';
   text: string;
   relevance_score: number;
   quality_score: number;
@@ -295,8 +295,17 @@ export interface KnowledgeMap {
   unknowns: string[];
 }
 
+export interface IntentRoute {
+  type: 'explanatory' | 'decision' | 'summary' | 'comparison' | 'general';
+  confidence: number;
+  rationale: string;
+  signals: string[];
+  pipeline: 'explanation' | 'decision' | 'summary' | 'comparison' | 'general';
+}
+
 export interface PCAState {
   user_input?: string;
+  intent?: IntentRoute;
   notes: string[];
   observations: string[];
   understanding: string;
@@ -607,6 +616,7 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="meta-item"><span class="meta-lbl">โมเดล:</span><span class="meta-val">${escHtml(pca.llm_provider ?? 'openai')} / ${escHtml(pca.llm_model ?? 'gpt-4o')}</span></div>
   <div class="meta-item"><span class="meta-lbl">เวลารวม:</span><span class="meta-val">${totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs + ' ms'}</span></div>
   <div class="meta-item"><span class="meta-lbl">ขั้นตอน:</span><span class="meta-val">${pca.trace.length} stages</span></div>
+  <div class="meta-item"><span class="meta-lbl">Intent:</span><span class="meta-val">${escHtml(pca.intent?.type ?? 'general')} / ${escHtml(pca.intent?.pipeline ?? 'general')}</span></div>
   <div class="meta-item"><span class="meta-lbl">ความมั่นใจ:</span><span class="cbadge ${confClass}">${pca.confidence}</span></div>
 </div>
 
@@ -717,6 +727,7 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   </table>
 </div>
 
+${(pca.intent?.type ?? 'general') === 'decision' && (pca.decision_matrix?.options?.length ?? 0) > 0 ? `
 <!-- DECISION MATRIX -->
 <div class="section">
   <div class="sec-title">⚡ Decision Matrix — alternatives, criteria & trade-offs</div>
@@ -727,9 +738,18 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="detail">${escHtml(pca.decision_matrix?.selection_reason ?? 'ไม่มี decision matrix')}</div>
   <table class="audit-table">
     <thead><tr><th>ทางเลือก</th><th>criteria scores</th><th>weighted</th><th>rationale / trade-off</th><th>evidence IDs</th></tr></thead>
-    <tbody>${decisionRows || '<tr><td colspan="5">ไม่มีทางเลือก</td></tr>'}</tbody>
+    <tbody>${decisionRows}</tbody>
   </table>
-</div>
+</div>` : `
+<div class="section">
+  <div class="sec-title">🧭 Intent Router — route-aware analysis</div>
+  <div class="score-box">
+    <span class="score-chip">intent: ${escHtml(pca.intent?.type ?? 'general')}</span>
+    <span class="score-chip">pipeline: ${escHtml(pca.intent?.pipeline ?? 'general')}</span>
+    <span class="score-chip">confidence: ${(pca.intent?.confidence ?? 0).toFixed(3)}</span>
+  </div>
+  <div class="detail">${escHtml(pca.intent?.rationale ?? 'ใช้คำตอบทั่วไปโดยไม่สมมติว่าเป็น decision')}</div>
+</div>`}
 
 <!-- MEMORY RETRIEVAL -->
 <div class="section">
@@ -1252,6 +1272,17 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   ))}
                 </View>
               )}
+              {message.pcaState.intent && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>🧭 Intent Router</Text>
+                  <Text style={styles.osCardText}>
+                    {message.pcaState.intent.type} → {message.pcaState.intent.pipeline} · confidence {message.pcaState.intent.confidence.toFixed(3)}
+                  </Text>
+                  <Text style={styles.osCardText} numberOfLines={3}>
+                    {message.pcaState.intent.rationale}
+                  </Text>
+                </View>
+              )}
               {message.pcaState.dataflow && message.pcaState.dataflow.length > 0 && (
                 <View style={styles.osCard}>
                   <Text style={styles.osCardTitle}>🔗 Cognitive Dataflow: {message.pcaState.dataflow.length} edges</Text>
@@ -1263,7 +1294,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   ))}
                 </View>
               )}
-              {message.pcaState.decision_matrix && message.pcaState.decision_matrix.options.length > 0 && (
+              {message.pcaState.intent?.type === 'decision' &&
+                message.pcaState.decision_matrix &&
+                message.pcaState.decision_matrix.options.length > 0 && (
                 <View style={styles.osCard}>
                   <Text style={styles.osCardTitle}>
                     ⚡ Decision Matrix · selected {message.pcaState.decision_matrix.selected_option}

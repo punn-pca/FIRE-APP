@@ -52,7 +52,7 @@ interface GovernanceReport {
 
 export interface EvidenceItem {
   id: string;
-  source: "user_input" | "conversation_history" | "memory";
+  source: "user_input" | "conversation_history" | "memory" | "knowledge_base";
   text: string;
   relevance_score: number;
   quality_score: number;
@@ -182,6 +182,16 @@ export interface MemoryRetrievalReport {
   miss_reason?: string;
 }
 
+export type IntentType = "explanatory" | "decision" | "summary" | "comparison" | "general";
+
+export interface IntentRoute {
+  type: IntentType;
+  confidence: number;
+  rationale: string;
+  signals: string[];
+  pipeline: "explanation" | "decision" | "summary" | "comparison" | "general";
+}
+
 export interface DecisionOption {
   id: string;
   label: string;
@@ -273,6 +283,7 @@ export interface ConversationTurn {
 export interface PCAState {
   user_input: string;
   language: "th" | "en";
+  intent: IntentRoute;
   observations: string[];
   understanding: string;
   purpose: string;
@@ -327,6 +338,64 @@ export interface PCAState {
 const THAI_REGEX = /[\u0E00-\u0E7F]/;
 export function detectLanguage(text: string): "th" | "en" {
   return THAI_REGEX.test(text) ? "th" : "en";
+}
+
+export function classifyIntent(question: string): IntentRoute {
+  const input = question.trim().toLowerCase();
+  const signals: string[] = [];
+  const has = (pattern: RegExp, label: string) => {
+    if (!pattern.test(input)) return false;
+    signals.push(label);
+    return true;
+  };
+
+  if (has(/สรุป|ย่อความ|สรุปบทความ|summari[sz]e|summary|ทำบทคัดย่อ/i, "summary marker")) {
+    return {
+      type: "summary",
+      confidence: 0.96,
+      rationale: "คำถามขอให้ย่อหรือสรุปเนื้อหา จึงใช้ Summary Pipeline แทนการตัดสินใจ",
+      signals,
+      pipeline: "summary",
+    };
+  }
+
+  if (has(/คืออะไร|หมายถึงอะไร|แปลว่าอะไร|อธิบาย|นิยาม|ทำไม|what is|what does|explain|define|why is|why does/i, "explanation marker")) {
+    return {
+      type: "explanatory",
+      confidence: 0.98,
+      rationale: "คำถามต้องการความหมาย กลไก หรือคำอธิบาย จึงไม่สร้างทางเลือกเชิงการตัดสินใจ",
+      signals,
+      pipeline: "explanation",
+    };
+  }
+
+  if (has(/เปรียบเทียบ|แตกต่างกันอย่างไร|ต่างกันอย่างไร|compare|comparison|versus|\bvs\b/i, "comparison marker")) {
+    return {
+      type: "comparison",
+      confidence: 0.93,
+      rationale: "คำถามต้องการเปรียบเทียบคุณลักษณะและข้อแลกเปลี่ยน ไม่ใช่การเลือกทางดำเนินการโดยอัตโนมัติ",
+      signals,
+      pipeline: "comparison",
+    };
+  }
+
+  if (has(/ควร|ดีไหม|ไหม|หรือไม่|เลือก|แนะนำ|ตัดสินใจ|ลงทุน|ลาออก|ซื้อ|สร้างระบบ|should|recommend|whether|choose|invest|quit|buy|build/i, "decision marker")) {
+    return {
+      type: "decision",
+      confidence: 0.88,
+      rationale: "คำถามมีสัญญาณขอคำแนะนำหรือเลือกแนวทาง จึงใช้ Decision Pipeline",
+      signals,
+      pipeline: "decision",
+    };
+  }
+
+  return {
+    type: "general",
+    confidence: 0.52,
+    rationale: "ยังไม่พบสัญญาณเฉพาะ จึงใช้ General Response Pipeline โดยไม่สมมติว่าเป็นการตัดสินใจ",
+    signals: ["no dominant intent marker"],
+    pipeline: "general",
+  };
 }
 
 function record(state: PCAState, stage: string, output: Record<string, unknown>, duration_ms = 0) {
@@ -530,6 +599,59 @@ export function buildEvidenceReport(
     });
   };
 
+  const intent = classifyIntent(question);
+  const conceptualKnowledge: Array<{
+    id: string;
+    matches: RegExp;
+    th: string;
+    en: string;
+    basis: string[];
+  }> = [
+    {
+      id: "knowledge-love-definition",
+      matches: /รัก|ความรัก|love/i,
+      th: "ความรักเป็นความผูกพันทางอารมณ์และสังคมที่อาจแสดงออกผ่านความใกล้ชิด ความห่วงใย และการดูแลกัน",
+      en: "Love is an emotional and social bond that can be expressed through intimacy, care, and concern for another person.",
+      basis: ["curated conceptual knowledge", "ใช้เป็นกรอบอธิบายทั่วไป ไม่ใช่ผลการค้นหาแบบสด"],
+    },
+    {
+      id: "knowledge-love-components",
+      matches: /รัก|ความรัก|love/i,
+      th: "กรอบจิตวิทยาบางแนวอธิบายความรักผ่านองค์ประกอบ เช่น ความใกล้ชิด ความผูกพัน และความมุ่งมั่น",
+      en: "Some psychological frameworks describe love through components such as intimacy, attachment, and commitment.",
+      basis: ["curated psychology concept", "เป็นกรอบอธิบายหนึ่ง ไม่ใช่ข้อสรุปเดียวของทุกบริบท"],
+    },
+    {
+      id: "knowledge-ai-definition",
+      matches: /ปัญญาประดิษฐ์|\bai\b|artificial intelligence/i,
+      th: "ปัญญาประดิษฐ์คือระบบคอมพิวเตอร์ที่ทำงานซึ่งโดยทั่วไปต้องใช้ความสามารถด้านการรับรู้ การเรียนรู้ หรือการให้เหตุผล",
+      en: "Artificial intelligence refers to computer systems performing tasks that commonly require perception, learning, or reasoning.",
+      basis: ["curated conceptual knowledge"],
+    },
+    {
+      id: "knowledge-time-definition",
+      matches: /เวลา|time/i,
+      th: "เวลาเป็นแนวคิดหรือปริมาณที่ใช้จัดลำดับเหตุการณ์และวัดช่วงห่างระหว่างเหตุการณ์",
+      en: "Time is a concept or quantity used to order events and measure intervals between events.",
+      basis: ["curated conceptual knowledge"],
+    },
+  ];
+
+  if (intent.pipeline === "explanation" || intent.pipeline === "comparison" || intent.pipeline === "general") {
+    conceptualKnowledge
+      .filter((entry) => entry.matches.test(question))
+      .forEach((entry) => {
+        addItem(
+          entry.id,
+          "knowledge_base",
+          detectLanguage(question) === "th" ? entry.th : entry.en,
+          0.95,
+          0.78,
+          entry.basis
+        );
+      });
+  }
+
   addItem(
     "evidence-input",
     "user_input",
@@ -576,12 +698,12 @@ export function buildEvidenceReport(
     : 0;
   const coverage_score = Number(
     clamp01(
-      (items.filter((item) => item.source !== "user_input" && item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).length + 1) /
+      items.filter((item) => item.source !== "user_input" && item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).length /
       (history.length > 0 || memories.length > 0 ? 3 : 1)
     ).toFixed(3)
   );
   return {
-    methodology: "composite = relevance×0.45 + source_quality×0.35 + consistency×0.20; relevance ใช้ token overlap",
+    methodology: "composite = relevance×0.45 + source_quality×0.35 + consistency×0.20; user_input is context, while knowledge_base/history/memory can support claims",
     items,
     aggregate_score,
     coverage_score,
@@ -669,17 +791,21 @@ function buildGovernanceReport(
   };
 }
 
-function buildKnowledgeMap(
+export function buildKnowledgeMap(
   state: PCAState,
   context: ContextValidation
 ): KnowledgeMap {
+  const supportedEvidence = state.evidence_report.items
+    .filter((item) => item.source !== "user_input")
+    .map((item) => item.text);
   return {
-    facts: [
-      state.language === "th"
-        ? `ข้อมูลที่ผู้ใช้ระบุ: ${state.user_input}`
-        : `User-provided input: ${state.user_input}`,
-      ...state.evidence,
-    ],
+    facts: supportedEvidence.length > 0
+      ? supportedEvidence
+      : [
+          state.language === "th"
+            ? "ยังไม่มีข้อเท็จจริงจาก knowledge base, memory หรือบริบทก่อนหน้า"
+            : "No factual support was found in the knowledge base, memory, or prior context.",
+        ],
     assumptions: state.hypotheses.map((hypothesis) => hypothesis.claim),
     unknowns: [
       ...context.missingSignals,
@@ -702,7 +828,8 @@ export function buildVerificationReport(
   };
   const hasFactLabel = hasSubstantiveLabel(/\[ข้อเท็จจริง\]|\[Fact\]/i);
   const hasAssumptionLabel = hasSubstantiveLabel(/\[สมมติฐาน\]|\[Assumption\]/i);
-  const preservesAgency = /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
+  const requiresAgency = state.intent.type === "decision";
+  const preservesAgency = !requiresAgency || /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
     responseText
   );
   const surfacesMissingInfo =
@@ -711,10 +838,12 @@ export function buildVerificationReport(
       /\[ข้อมูลที่ขาด\]|\[missing information\]|ข้อมูลที่ต้องการเพิ่ม/i.test(responseText) &&
       state.missing_info.some((missing) => responseText.includes(missing) || /ยังไม่มีข้อมูล|ยังไม่ทราบ|ต้องการข้อมูลเพิ่ม/i.test(responseText))
     );
-  const evidenceIds = state.evidence_report.items.map((item) => item.id);
+  const evidenceIds = state.evidence_report.items
+    .filter((item) => item.source !== "user_input")
+    .map((item) => item.id);
   const citedEvidenceIds = evidenceIds.filter((id) => responseText.includes(`[หลักฐาน: ${id}]`));
   const acknowledgesEvidence =
-    state.evidence_report.items.length === 0 ||
+    evidenceIds.length === 0 ||
     citedEvidenceIds.length > 0;
   const acknowledgesConflicts =
     state.conflict_findings.length === 0 ||
@@ -759,7 +888,9 @@ export function buildVerificationReport(
     },
     {
       criterion: "human_agency",
-      rule: "response ต้องยืนยันว่าผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย",
+      rule: requiresAgency
+        ? "response ต้องยืนยันว่าผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
+        : "ไม่บังคับ Human Agency สำหรับคำถามที่ไม่ใช่ decision",
       passed: preservesAgency,
       evidence: preservesAgency ? "พบข้อความรักษา Human Agency" : "ไม่พบข้อความยืนยัน",
       score: preservesAgency ? 1 : 0,
@@ -816,12 +947,13 @@ export function buildVerificationReport(
 }
 
 export function buildVerifiedFallback(state: PCAState): string {
-  const evidenceText = state.evidence_report.items.length > 0
-    ? state.evidence_report.items
+  const supportedEvidence = state.evidence_report.items.filter((item) => item.source !== "user_input");
+  const evidenceText = supportedEvidence.length > 0
+    ? supportedEvidence
       .slice(0, 3)
       .map((item) => `- ${item.text} [หลักฐาน: ${item.id}]`)
       .join("\n")
-    : "- ยังไม่มีหลักฐานภายนอกที่ผ่านเกณฑ์การค้นหา";
+    : "- ยังไม่มีหลักฐานสนับสนุนจาก memory, history หรือ knowledge base";
   const selected = state.decision_matrix.options.find(
     (option) => option.id === state.decision_matrix.selected_option
   );
@@ -840,6 +972,40 @@ export function buildVerifiedFallback(state: PCAState): string {
   const optionText = state.decision_matrix.options
     .map((option) => `- ${option.label}: คะแนน ${option.weighted_score.toFixed(3)} — ${option.rationale}`)
     .join("\n");
+
+  if (state.intent.type !== "decision") {
+    const routeTitle: Record<IntentType, string> = {
+      explanatory: "คำอธิบาย",
+      summary: "สรุปสาระสำคัญ",
+      comparison: "การเปรียบเทียบ",
+      general: "คำตอบ",
+      decision: "ข้อสรุป",
+    };
+    const conclusion = state.intent.type === "explanatory"
+      ? state.language === "th"
+        ? "โดยสรุป ความหมายของหัวข้อนี้ควรเข้าใจจากแนวคิดและบริบทที่เกี่ยวข้อง ไม่ใช่จากทางเลือกการดำเนินการ"
+        : "In summary, this topic should be understood through its concepts and context, not through an action choice."
+      : state.language === "th"
+        ? "โดยสรุป คำตอบนี้จัดทำตามประเภทคำถามโดยไม่สมมติว่าผู้ใช้ต้องเลือกแนวทางดำเนินการ"
+        : "In summary, this answer follows the question type without assuming that the user needs to choose an action.";
+    return `[ข้อเท็จจริง]
+${evidenceText}
+
+[สมมติฐาน]
+${assumptionText || "- ยังไม่มีสมมติฐานเพิ่มเติม"}
+
+[ข้อมูลที่ขาด]
+${missingText}
+
+[ข้อจำกัดและความขัดแย้ง]
+${conflictText}
+
+[${routeTitle[state.intent.type]}]
+${conclusion}
+
+[ข้อสรุป]
+${conclusion}`;
+  }
 
   return `[ข้อเท็จจริง]
 ${evidenceText}
@@ -1064,18 +1230,10 @@ function stageObservation(state: PCAState) {
 }
 
 function stageUnderstanding(state: PCAState) {
-  const input = state.user_input.toLowerCase();
-  const intentScores = {
-    decision: (input.match(/ตัดสินใจ|เลือก|decision|choose/gi) ?? []).length,
-    comparison: (input.match(/เปรียบเทียบ|เทียบ|compare|vs|ดีกว่า/gi) ?? []).length,
-    philosophy: (input.match(/ปรัชญา|จริยธรรม|philosophy|ethics|moral/gi) ?? []).length,
-    ai_safety: (input.match(/ai|ปัญญาประดิษฐ์|alignment|safety|agi/gi) ?? []).length,
-  };
-  const [selectedIntent] = Object.entries(intentScores).sort(([, a], [, b]) => b - a);
-  const isDecision = intentScores.decision > 0;
-  const isComparison = intentScores.comparison > 0;
-  const isPhilosophy = intentScores.philosophy > 0;
-  const isAI = intentScores.ai_safety > 0;
+  state.intent = classifyIntent(state.user_input);
+  const isDecision = state.intent.type === "decision";
+  const isComparison = state.intent.type === "comparison";
+  const isExplanatory = state.intent.type === "explanatory";
 
   if (isDecision) {
     state.understanding =
@@ -1087,60 +1245,89 @@ function stageUnderstanding(state: PCAState) {
       state.language === "th"
         ? "ผู้ใช้ต้องการเปรียบเทียบความแตกต่างและข้อดีข้อเสียเพื่อมุมมองที่รอบด้าน"
         : "The user wants to compare options and trade-offs for a comprehensive perspective.";
-  } else if (isPhilosophy) {
+  } else if (isExplanatory) {
     state.understanding =
       state.language === "th"
-        ? "ผู้ใช้ต้องการถกประเด็นปรัชญาหรือจริยธรรมอย่างลึกซึ้ง"
-        : "The user seeks philosophical or ethical exploration.";
-  } else if (isAI) {
-    state.understanding =
-      state.language === "th"
-        ? "ผู้ใช้กำลังพิจารณาประเด็นด้าน AI และความปลอดภัยของระบบ"
-        : "The user is examining AI alignment, ethics, or system safety.";
+        ? "ผู้ใช้ต้องการคำอธิบาย ความหมาย หรือกลไกของหัวข้อ ไม่ใช่ข้อเสนอให้เลือกดำเนินการ"
+        : "The user wants an explanation, definition, or mechanism rather than an action recommendation.";
   } else {
     state.understanding =
       state.language === "th"
-        ? "ผู้ใช้ต้องการวิเคราะห์และประเมินข้อมูล เพื่อทำความเข้าใจสถานการณ์และหาแนวทาง"
-        : "The user wants to analyze information to clarify context and find the best way forward.";
+        ? "ผู้ใช้ต้องการคำตอบที่ตรงกับคำถาม โดยยังไม่ควรสมมติว่าเป็นปัญหาการตัดสินใจ"
+        : "The user wants a direct answer without assuming this is a decision problem.";
   }
   state.module_audit.push({
-    module: "Understanding",
-    algorithm: "keyword feature scoring with deterministic priority classification",
+    module: "Intent Router",
+    algorithm: "deterministic intent classification with route-specific pipeline selection",
     input_count: tokenize(state.user_input).length,
-    score: selectedIntent?.[1] ? Number(clamp01(selectedIntent[1] / 3).toFixed(3)) : 0,
+    score: state.intent.confidence,
     findings: [
-      `intent ที่มีคะแนนสูงสุด: ${selectedIntent?.[0] ?? "general"}`,
-      `คะแนน intent: ${selectedIntent?.[1] ?? 0}`,
+      `route: ${state.intent.type}`,
+      `pipeline: ${state.intent.pipeline}`,
+      state.intent.rationale,
     ],
     calculations: {
-      selected_intent: selectedIntent?.[0] ?? "general",
-      decision_score: intentScores.decision,
-      comparison_score: intentScores.comparison,
-      philosophy_score: intentScores.philosophy,
-      ai_safety_score: intentScores.ai_safety,
+      intent_type: state.intent.type,
+      pipeline: state.intent.pipeline,
+      classifier_confidence: state.intent.confidence,
+      signals: state.intent.signals.join(", "),
     },
+  });
+  state.module_audit.push({
+    module: "Understanding",
+    algorithm: "intent-aware context interpretation",
+    input_count: tokenize(state.user_input).length,
+    score: state.intent.confidence,
+    findings: [state.understanding],
+    calculations: { routed_intent: state.intent.type },
   });
   record(state, "UNDERSTANDING", {
     understanding: state.understanding,
-    intent_scores: intentScores,
-    selected_intent: selectedIntent?.[0] ?? "general",
+    intent: state.intent,
   });
 }
 
 function stagePurpose(state: PCAState) {
-  state.purpose =
-    state.language === "th"
-      ? `ช่วยวิเคราะห์ ตรวจสอบข้อมูล และเสนอทางเลือกให้คุณตัดสินใจได้อย่างรอบคอบเกี่ยวกับ: "${state.user_input.slice(0, 80)}"`
-      : `Analyze evidence and present options for: "${state.user_input.slice(0, 80)}"`;
+  const purposeByRoute: Record<IntentRoute["pipeline"], [string, string]> = {
+    explanation: [
+      `อธิบายความหมาย กลไก และมุมมองที่เกี่ยวข้องกับ: "${state.user_input.slice(0, 80)}"`,
+      `Explain the meaning, mechanism, and relevant perspectives of: "${state.user_input.slice(0, 80)}"`,
+    ],
+    decision: [
+      `ช่วยประเมินหลักฐานและทางเลือกเพื่อสนับสนุนการตัดสินใจเกี่ยวกับ: "${state.user_input.slice(0, 80)}"`,
+      `Evaluate evidence and options to support a decision about: "${state.user_input.slice(0, 80)}"`,
+    ],
+    summary: [
+      `สรุปสาระสำคัญของ: "${state.user_input.slice(0, 80)}"`,
+      `Summarize the key points of: "${state.user_input.slice(0, 80)}"`,
+    ],
+    comparison: [
+      `เปรียบเทียบคุณลักษณะ ความแตกต่าง และข้อแลกเปลี่ยนของ: "${state.user_input.slice(0, 80)}"`,
+      `Compare the characteristics, differences, and trade-offs of: "${state.user_input.slice(0, 80)}"`,
+    ],
+    general: [
+      `ตอบคำถามโดยตรงและแยกข้อเท็จจริงออกจากการตีความเกี่ยวกับ: "${state.user_input.slice(0, 80)}"`,
+      `Answer directly while separating facts from interpretation about: "${state.user_input.slice(0, 80)}"`,
+    ],
+  };
+  const [thaiPurpose, englishPurpose] = purposeByRoute[state.intent.pipeline];
+  state.purpose = state.language === "th" ? thaiPurpose : englishPurpose;
   state.constraints = [
-    state.language === "th"
-      ? "คงไว้ซึ่งเสรีภาพในการตัดสินใจของมนุษย์ (Human Agency)"
-      : "Preserve human agency and final decision authority.",
+    ...(state.intent.type === "decision"
+      ? [
+          state.language === "th"
+            ? "คงไว้ซึ่งเสรีภาพในการตัดสินใจของมนุษย์ (Human Agency)"
+            : "Preserve human agency and final decision authority.",
+        ]
+      : []),
     state.language === "th"
       ? "อ้างอิงหลักฐานเชิงประจักษ์และระบุระดับความมั่นใจอย่างโปร่งใส"
       : "Base conclusions on empirical evidence with explicit confidence levels.",
+    state.language === "th"
+      ? `ใช้ ${state.intent.pipeline} pipeline ที่ตรงกับเจตนาของคำถาม`
+      : `Use the ${state.intent.pipeline} pipeline that matches the question intent.`,
   ];
-  record(state, "PURPOSE", { purpose: state.purpose, constraints: state.constraints });
+  record(state, "PURPOSE", { purpose: state.purpose, constraints: state.constraints, intent: state.intent });
 }
 
 function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]) {
@@ -1276,6 +1463,16 @@ function stageEvidenceEvaluation(
 }
 
 export function buildDecisionMatrix(state: PCAState, critiqueScore: number): DecisionMatrix {
+  if (state.intent.type !== "decision") {
+    return {
+      methodology: `decision matrix not applicable for ${state.intent.type} intent; route uses ${state.intent.pipeline} pipeline`,
+      criteria_weights: {},
+      options: [],
+      selected_option: "",
+      selected_score: 0,
+      selection_reason: "ไม่สร้างทางเลือกเชิงการตัดสินใจ เพราะคำถามนี้ไม่ใช่ decision problem",
+    };
+  }
   const evidenceScore = state.evidence_report.aggregate_score;
   const contextScore = state.missing_info.length === 0
     ? 1
@@ -1352,19 +1549,23 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
 export function buildLogicalVerification(state: PCAState, responseText: string): LogicalVerification {
   const checks: VerificationCheck[] = [];
   const citedIds = state.evidence_report.items
+    .filter((item) => item.source !== "user_input")
     .map((item) => item.id)
     .filter((id) => responseText.includes(`[หลักฐาน: ${id}]`));
   const groundedCitations = citedIds.filter((id) => {
     const item = state.evidence_report.items.find((candidate) => candidate.id === id);
     return item ? overlapScore(item.text, responseText) >= 0.15 : false;
   });
+  const allowedEvidenceIds = state.evidence_report.items
+    .filter((item) => item.source !== "user_input")
+    .map((item) => item.id);
   const groundingScore = citedIds.length === 0
-    ? 0
+    ? allowedEvidenceIds.length === 0 ? 1 : 0
     : groundedCitations.length / citedIds.length;
   checks.push({
     criterion: "evidence_grounding",
     rule: "ทุก evidence citation ต้องมี token ที่สอดคล้องกับเนื้อหาหลักฐาน",
-    passed: state.evidence_report.items.length === 0 || groundingScore >= 0.6,
+    passed: citedIds.length === 0 || groundingScore >= 0.6,
     evidence: `${groundedCitations.length}/${citedIds.length} citations มี token overlap กับ evidence`,
     score: Number(clamp01(groundingScore).toFixed(3)),
   });
@@ -1372,25 +1573,35 @@ export function buildLogicalVerification(state: PCAState, responseText: string):
   const selected = state.decision_matrix.options.find(
     (option) => option.id === state.decision_matrix.selected_option
   );
-  const decisionAligned = Boolean(
+  const decisionAligned = state.intent.type !== "decision" || Boolean(
     selected &&
     (responseText.includes(selected.id) || responseText.includes(selected.label))
   );
   checks.push({
     criterion: "decision_alignment",
-    rule: "ข้อสรุปต้องอ้างถึงทางเลือกที่ Decision Matrix เลือก",
+    rule: state.intent.type === "decision"
+      ? "ข้อสรุปต้องอ้างถึงทางเลือกที่ Decision Matrix เลือก"
+      : "ไม่บังคับ Decision Matrix สำหรับคำถามที่ไม่ใช่ decision",
     passed: decisionAligned,
     evidence: decisionAligned
-      ? `พบ selected option: ${selected?.label}`
+      ? state.intent.type === "decision"
+        ? `พบ selected option: ${selected?.label}`
+        : "ข้าม decision alignment ตาม intent route"
       : `ไม่พบ selected option: ${selected?.label ?? state.decision_matrix.selected_option}`,
     score: decisionAligned ? 1 : 0,
   });
 
-  const hasConclusion = /ข้อสรุป|สรุป|decision summary|strategic conclusion/i.test(responseText);
+  const factIndex = responseText.search(/\[ข้อเท็จจริง\]|\[Fact\]/i);
+  const assumptionIndex = responseText.search(/\[สมมติฐาน\]|\[Assumption\]/i);
+  const conclusionIndex = responseText.search(/ข้อสรุป|สรุป|decision summary|strategic conclusion/i);
+  const hasConclusion = conclusionIndex >= 0;
   const hasFactAndAssumption = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText) &&
     /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
   const conclusionConsistent = hasConclusion && hasFactAndAssumption &&
-    !(/\[ข้อเท็จจริง\][\s\S]{0,180}(?:อาจ|น่าจะ|คาดว่า)/i.test(responseText));
+    conclusionIndex > factIndex &&
+    conclusionIndex > assumptionIndex &&
+    (state.intent.type !== "decision" ||
+      !(/\[ข้อเท็จจริง\][\s\S]{0,180}(?:อาจ|น่าจะ|คาดว่า)/i.test(responseText)));
   checks.push({
     criterion: "fact_conclusion_consistency",
     rule: "ข้อเท็จจริงต้องไม่ถูกเขียนเป็นสมมติฐาน และต้องมีข้อสรุปที่แยกจาก facts",
@@ -1412,7 +1623,9 @@ export function buildLogicalVerification(state: PCAState, responseText: string):
 export function buildReasoningGraph(state: PCAState): ReasoningGraph {
   const claims: ClaimNode[] = [];
   const edges: ReasoningGraphEdge[] = [];
-  const evidenceClaims = state.evidence_report.items.map((item) => {
+  const evidenceClaims = state.evidence_report.items
+    .filter((item) => item.source !== "user_input")
+    .map((item) => {
     const id = `claim-${item.id}`;
     claims.push({
       id,
@@ -1426,7 +1639,7 @@ export function buildReasoningGraph(state: PCAState): ReasoningGraph {
       support_score: Number(item.composite_score.toFixed(3)),
     });
     return { id, evidenceId: item.id };
-  });
+    });
 
   const assumptionClaims = state.hypotheses.map((hypothesis, index) => {
     const id = `claim-assumption-${index + 1}`;
@@ -1463,11 +1676,18 @@ export function buildReasoningGraph(state: PCAState): ReasoningGraph {
   const selected = state.decision_matrix.options.find(
     (option) => option.id === state.decision_matrix.selected_option
   );
-  const conclusionId = "claim-conclusion-selected-option";
-  const conclusionEvidenceIds = selected?.evidence_ids ?? [];
+  const conclusionId = state.intent.type === "decision"
+    ? "claim-conclusion-selected-option"
+    : "claim-conclusion-routed-answer";
+  const conclusionEvidenceIds = state.intent.type === "decision"
+    ? selected?.evidence_ids ?? []
+    : state.evidence_report.items
+      .filter((item) => item.source !== "user_input")
+      .slice(0, 4)
+      .map((item) => item.id);
   const conclusionSupport = clamp01(
     (state.evidence_report.aggregate_score * 0.5) +
-    (state.decision_matrix.selected_score * 0.3) +
+    (state.intent.type === "decision" ? state.decision_matrix.selected_score * 0.3 : 0.15) +
     (state.logical_verification.score * 0.2)
   );
   const conclusionStatus: ClaimStatus = conclusionSupport >= 0.75
@@ -1475,10 +1695,12 @@ export function buildReasoningGraph(state: PCAState): ReasoningGraph {
     : conclusionSupport >= 0.45 ? "partial" : "unsupported";
   claims.push({
     id: conclusionId,
-    text: selected?.label ?? state.decision ?? "ยังไม่มีข้อสรุป",
+    text: state.intent.type === "decision"
+      ? selected?.label ?? state.decision ?? "ยังไม่มีข้อสรุป"
+      : state.decision || "คำตอบถูกสร้างตาม intent route",
     type: "conclusion",
     status: conclusionStatus,
-    source_module: "Decision",
+    source_module: state.intent.type === "decision" ? "Decision" : "Intent Router",
     evidence_ids: conclusionEvidenceIds,
     assumption_ids: assumptionClaims,
     conflict_ids: state.conflict_findings.map((finding) => finding.id),
@@ -1493,7 +1715,9 @@ export function buildReasoningGraph(state: PCAState): ReasoningGraph {
       to: conclusionId,
       relation: "supports",
       weight: Number((state.evidence_report.items.find((item) => item.id === evidence.evidenceId)?.composite_score ?? 0).toFixed(3)),
-      rationale: "หลักฐานนี้ถูกใช้ประเมินและสนับสนุนทางเลือกที่เลือก",
+      rationale: state.intent.type === "decision"
+        ? "หลักฐานนี้ถูกใช้ประเมินและสนับสนุนทางเลือกที่เลือก"
+        : "หลักฐานนี้สนับสนุนคำตอบตาม intent route",
     });
   }
   for (const assumptionId of assumptionClaims) {
@@ -1542,7 +1766,7 @@ export function buildReasoningGraph(state: PCAState): ReasoningGraph {
   return {
     claims,
     edges,
-    selected_option: state.decision_matrix.selected_option,
+    selected_option: state.intent.type === "decision" ? state.decision_matrix.selected_option : "",
     unsupported_claim_count: claims.filter((claim) => claim.status === "unsupported").length,
     methodology: "claim-level graph: evidence supports, assumptions condition, conflicts contradict, unknowns constrain conclusions",
   };
@@ -1596,24 +1820,40 @@ export function buildStateTransitions(state: PCAState): StateTransition[] {
       0,
       state.evidence_report.aggregate_score,
       "รวม relevance, quality และ consistency ของ evidence",
-      "กำหนดน้ำหนักหลักฐานที่ใช้ใน Decision Matrix"
+      state.intent.type === "decision"
+        ? "กำหนดน้ำหนักหลักฐานที่ใช้ใน Decision Matrix"
+        : "กำหนดขอบเขตหลักฐานสำหรับคำตอบตาม intent route"
     ),
-    transition(
-      "transition-decision-selection",
-      "Decision",
-      "decision_matrix.selected_option",
-      "",
-      state.decision_matrix.selected_option,
-      "คำนวณ weighted multi-criteria score",
-      `เลือกทางเลือกด้วย score ${state.decision_matrix.selected_score.toFixed(3)}`
-    ),
+    ...(state.intent.type === "decision"
+      ? [
+          transition(
+            "transition-decision-selection",
+            "Decision",
+            "decision_matrix.selected_option",
+            "",
+            state.decision_matrix.selected_option,
+            "คำนวณ weighted multi-criteria score",
+            `เลือกทางเลือกด้วย score ${state.decision_matrix.selected_score.toFixed(3)}`
+          ),
+        ]
+      : [
+          transition(
+            "transition-intent-route",
+            "Intent Router",
+            "intent",
+            "",
+            state.intent,
+            "จำแนก intent ก่อนเลือก pipeline",
+            `ใช้ ${state.intent.pipeline} pipeline และไม่สร้าง Decision Matrix`
+          ),
+        ]),
     transition(
       "transition-verification",
       "Verification",
       "verification.status",
       "ต้องตรวจสอบ",
       state.verification.status,
-      "ตรวจ evidence grounding, decision alignment และ consistency",
+      `ตรวจ evidence grounding, ${state.intent.type === "decision" ? "decision alignment" : "route alignment"} และ consistency`,
       `verification score ${state.verification.score.toFixed(3)} ส่งผลต่อ confidence`
     ),
     transition(
@@ -1656,15 +1896,29 @@ function buildDataflow(state: PCAState): DataflowEdge[] {
     edge("flow-evidence-critique", "Evidence Evaluation", "Critique",
       ["evidence_report", "aggregate_score"], ["missing_signals", "uncertainty"],
       "evidence coverage and consistency produce critique signals", state.evidence_report.items.length),
-    edge("flow-critique-decision", "Critique", "Decision",
-      ["critique_score", "missing_info", "conflicts"], ["risk_penalties", "matrix_constraints"],
-      "critique adjusts risk-control and feasibility criteria", state.conflict_findings.length + state.missing_info.length),
-    edge("flow-evidence-decision", "Evidence Evaluation", "Decision",
-      ["evidence_items", "evidence_score"], ["criterion_scores", "evidence_ids"],
-      "evidence items support option scoring and citation", state.evidence_report.items.length),
-    edge("flow-decision-communication", "Decision", "Communication",
-      ["decision_matrix", "selected_option"], ["prompt_constraints", "allowed_citations"],
-      "matrix and selected option become generation constraints", state.decision_matrix.options.length),
+    ...(state.intent.type === "decision"
+      ? [
+          edge("flow-critique-decision", "Critique", "Decision",
+            ["critique_score", "missing_info", "conflicts"], ["risk_penalties", "matrix_constraints"],
+            "critique adjusts risk-control and feasibility criteria", state.conflict_findings.length + state.missing_info.length),
+          edge("flow-evidence-decision", "Evidence Evaluation", "Decision",
+            ["evidence_items", "evidence_score"], ["criterion_scores", "evidence_ids"],
+            "evidence items support option scoring and citation", state.evidence_report.items.length),
+          edge("flow-decision-communication", "Decision", "Communication",
+            ["decision_matrix", "selected_option"], ["prompt_constraints", "allowed_citations"],
+            "matrix and selected option become generation constraints", state.decision_matrix.options.length),
+        ]
+      : [
+          edge("flow-critique-intent-route", "Critique", "Intent Router",
+            ["critique_score", "missing_info", "conflicts"], ["route_constraints", "uncertainty"],
+            "critique constrains the routed answer", state.conflict_findings.length + state.missing_info.length),
+          edge("flow-evidence-intent-route", "Evidence Evaluation", "Intent Router",
+            ["evidence_items", "evidence_score"], ["allowed_citations", "route_grounding"],
+            "evidence supports the routed answer without creating action alternatives", state.evidence_report.items.length),
+          edge("flow-intent-communication", "Intent Router", "Communication",
+            ["intent", "pipeline"], ["prompt_constraints", "allowed_citations"],
+            "intent route becomes the generation constraint", 1),
+        ]),
     edge("flow-communication-verification", "Communication", "Verification",
       ["response", "evidence_citations"], ["logical_checks", "grounding_checks"],
       "response citations and conclusion are tested against source evidence", 1),
@@ -1779,23 +2033,33 @@ function stageDecision(
   conflictFindings: ConflictFinding[]
 ) {
   state.decision =
-    state.language === "th"
-      ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและข้อจำกัด"
-      : "Present strategic conclusions distinguishing facts from interpretations, with explicit scope and limitations.";
+    state.intent.type === "decision"
+      ? state.language === "th"
+        ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและข้อจำกัด"
+        : "Present strategic conclusions distinguishing facts from interpretations, with explicit scope and limitations."
+      : state.language === "th"
+        ? `ใช้ ${state.intent.pipeline} pipeline เพื่อสร้างคำตอบตามเจตนาของคำถาม โดยไม่สร้างทางเลือกเชิงการตัดสินใจ`
+        : `Use the ${state.intent.pipeline} pipeline to answer the question without generating action alternatives.`;
 
   state.conflicts = conflicts;
   state.conflict_findings = conflictFindings;
   const evidenceScore = state.evidence_report.aggregate_score;
   const critiqueScore = state.module_audit.find((audit) => audit.module === "Critique")?.score ?? 0;
   state.decision_matrix = buildDecisionMatrix(state, critiqueScore);
-  const aggregationScore = Number(
-    (state.decision_matrix.selected_score * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
-  );
+  const aggregationScore = state.intent.type === "decision"
+    ? Number(
+      (state.decision_matrix.selected_score * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
+    )
+    : Number(
+      (state.evidence_report.aggregate_score * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
+    );
   state.confidence_report = buildConfidenceReport(state, 0);
   state.confidence = state.confidence_report.band;
   state.module_audit.push({
     module: "Decision",
-    algorithm: state.decision_matrix.methodology,
+    algorithm: state.intent.type === "decision"
+      ? state.decision_matrix.methodology
+      : `route-aware aggregation for ${state.intent.pipeline} pipeline`,
     input_count: state.evidence_report.items.length + conflictFindings.length + state.decision_matrix.options.length,
     score: Math.max(0, aggregationScore),
     findings: [
@@ -1919,14 +2183,16 @@ export function buildSystemPrompt(
       ? `\n⚠️ ตรวจพบความขัดแย้งที่อาจเกิดขึ้น: ${conflicts.join("; ")}\nกรุณาตรวจสอบความสอดคล้องก่อนตอบ`
       : "";
 
+  const allowedEvidence = state.evidence_report.items.filter((item) => item.source !== "user_input");
   const evidenceSection = `
-หลักฐานที่ pipeline อนุญาตให้อ้างอิง:
-${state.evidence_report.items.map((item) =>
+ หลักฐานที่ pipeline อนุญาตให้อ้างอิง:
+${allowedEvidence.map((item) =>
   `- [หลักฐาน: ${item.id}] source=${item.source}, relevance=${item.relevance_score.toFixed(3)}, composite=${item.composite_score.toFixed(3)}: ${item.text}`
 ).join("\n")}
-หากใช้หลักฐาน ให้ใส่ evidence id ในเนื้อหาด้วยรูปแบบ [หลักฐาน: evidence-id] และห้ามอ้างหลักฐานที่ไม่มีในรายการนี้`;
+ หากใช้หลักฐาน ให้ใส่ evidence id ในเนื้อหาด้วยรูปแบบ [หลักฐาน: evidence-id] และห้ามอ้างหลักฐานที่ไม่มีในรายการนี้
+ user_input เป็นเพียงคำถามและบริบท ไม่ใช่หลักฐาน`;
 
-  const decisionSection = `
+  const decisionSection = state.intent.type === "decision" ? `
 ข้อกำหนดจาก Decision module:
 - decision: ${state.decision}
 - aggregation score: ${state.module_audit.find((audit) => audit.module === "Decision")?.score?.toFixed(3) ?? "0.000"}
@@ -1936,7 +2202,14 @@ ${state.evidence_report.items.map((item) =>
 - decision matrix reason: ${state.decision_matrix.selection_reason}
 - alternatives: ${state.decision_matrix.options.map((option) => `${option.id}=${option.label} (${option.weighted_score.toFixed(3)})`).join("; ")}
 - ต้องกล่าวถึง selected option หรือ label ของทางเลือกที่เลือกในข้อสรุป และอธิบาย trade-off กับทางเลือกอื่น
-- confidence ต้องไม่เกินระดับที่หลักฐานรองรับ และผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`;
+- confidence ต้องไม่เกินระดับที่หลักฐานรองรับ และผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`
+    : `
+ข้อกำหนดจาก Intent Router:
+- route: ${state.intent.type}
+- pipeline: ${state.intent.pipeline}
+- rationale: ${state.intent.rationale}
+- ห้ามสร้าง Decision Matrix หรือเสนอทางเลือกเชิงการดำเนินการ เพราะคำถามนี้ไม่ใช่ decision
+- ตอบตามเจตนาของคำถามโดยตรง และอย่าเขียนคำถามของผู้ใช้ซ้ำเป็นข้อเท็จจริง`;
 
   const conflictSection = state.conflict_findings.length > 0
     ? `
@@ -1953,7 +2226,7 @@ ${state.conflict_findings.map((finding) =>
  - Firekeeper OS lifecycle: Understand → Plan → Reason → Verify → Respond → Reflect
  - Governance gate: Truth before certainty, Evidence before opinion, Human agency before automation
 - ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
-- ห้ามตัดสินใจแทนผู้ใช้
+ - ห้ามตัดสินใจแทนผู้ใช้
 - แยกประเภทข้อมูลด้วย label ดังนี้:
   · [ข้อเท็จจริง] — ยืนยันได้จากหลักฐาน
   · [สมมติฐาน] — อนุมาน ยังไม่พิสูจน์
@@ -1962,8 +2235,28 @@ ${state.conflict_findings.map((finding) =>
 - 9. Graceful Fallback: หากข้อมูลไม่พอ ให้ระบุ [ข้อมูลที่ขาด] และเสนอสมมติฐานชัดเจน ห้ามเดาโดยไม่แจ้ง
  - 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน
  - ต้องมีเนื้อหาจริงหลัง [ข้อเท็จจริง] และ [สมมติฐาน] ไม่ใช่เพียงการกล่าวถึง label
- - หากมีหลักฐาน ให้แสดงการอ้างอิงแบบ [หลักฐาน: evidence-id] อย่างน้อยหนึ่งรายการ
+  - ห้ามอ้าง user_input เป็นหลักฐาน; หากมี knowledge/memory/history evidence ให้แสดงการอ้างอิงแบบ [หลักฐาน: evidence-id]
  - หากมี conflict ให้แสดงการอ้างอิงแบบ [ความขัดแย้ง: conflict-id] พร้อมเหตุผล`;
+
+  const routeStructure = state.intent.type === "decision"
+    ? `
+### 3. ข้อจำกัดและทางเลือก (Boundaries & Options)
+ระบุข้อจำกัด ความเสี่ยง และเสนอทางเลือก 2-3 แนว`
+    : state.intent.type === "explanatory"
+      ? `
+### 3. คำอธิบายและข้อสรุป (Explanation & Conclusion)
+อธิบายความหมาย กลไก หรือมุมมองที่เกี่ยวข้อง โดยไม่สร้างตัวเลือกการดำเนินการ`
+      : state.intent.type === "summary"
+        ? `
+### 3. สรุปสาระสำคัญ (Summary)
+สรุปเฉพาะสาระที่มีอยู่ และแยกข้อมูลที่ยังไม่ทราบ`
+        : state.intent.type === "comparison"
+          ? `
+### 3. ตารางเปรียบเทียบ (Comparison)
+เปรียบเทียบความแตกต่าง ข้อดี ข้อจำกัด และ trade-off โดยไม่บังคับให้เลือก`
+          : `
+### 3. คำตอบโดยตรง (Direct Answer)
+ตอบตามข้อมูลที่รองรับ โดยไม่สมมติว่าเป็นการตัดสินใจ`;
 
   if (deepReasoning) {
     return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
@@ -1993,8 +2286,7 @@ ${coreRules}
 ### # ห่วงโซ่เหตุผล (Causal Chain & Uncertainty)
 [ต้นเหตุ] → [กลไก] → [ผลลัพธ์] พร้อมระดับความไม่แน่นอน
 
-### # ทางเลือกและข้อแลกเปลี่ยน (Strategic Options & Trade-offs)
-เสนอ 2-3 ทางเลือก พร้อม Pros/Cons/Risks
+${routeStructure}
 
 ### # ข้อสรุปเชิงยุทธศาสตร์ (Strategic Conclusion)
 สรุปคำแนะนำพร้อมระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ) ไม่ตัดสินใจแทน
@@ -2020,8 +2312,7 @@ ${coreRules}
 ### 2. ข้อสรุปเชิงยุทธศาสตร์ (Strategic Analysis)
 วิเคราะห์หลักฐาน แยก [ข้อเท็จจริง] / [สมมติฐาน] / [ข้อมูลที่ขาด] ระบุระดับความมั่นใจ
 
-### 3. ข้อจำกัดและทางเลือก (Boundaries & Options)
-ระบุข้อจำกัด ความเสี่ยง และเสนอทางเลือก 2-3 แนว
+${routeStructure}
 
 [DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ พร้อมระดับความมั่นใจ`;
 }
@@ -2058,6 +2349,7 @@ router.post("/", async (req, res) => {
   const state: PCAState = {
     user_input: question.trim(),
     language: "th",
+    intent: classifyIntent(question.trim()),
     observations: [],
     understanding: "",
     purpose: "",
@@ -2438,6 +2730,7 @@ router.post("/", async (req, res) => {
         notes: state.notes,
         observations: state.observations,
         language: state.language,
+        intent: state.intent,
         understanding: state.understanding,
         purpose: state.purpose,
         decision: state.decision,

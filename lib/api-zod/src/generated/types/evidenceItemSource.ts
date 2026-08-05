@@ -13,4 +13,5 @@ export const EvidenceItemSource = {
   user_input: 'user_input',
   conversation_history: 'conversation_history',
   memory: 'memory',
+  knowledge_base: 'knowledge_base',
 } as const;

@@ -16,6 +16,7 @@ export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
 
+
 /**
  * @summary Analyze a question through the Firekeeper PCA pipeline
  */
@@ -51,6 +52,13 @@ export const AnalyzeQuestionResponse = zod.object({
   "pcaState": zod.object({
   "user_input": zod.string(),
   "language": zod.enum(['th', 'en']),
+  "intent": zod.object({
+  "type": zod.enum(['explanatory', 'decision', 'summary', 'comparison', 'general']),
+  "confidence": zod.number(),
+  "rationale": zod.string(),
+  "signals": zod.array(zod.string()),
+  "pipeline": zod.enum(['explanation', 'decision', 'summary', 'comparison', 'general'])
+}),
   "understanding": zod.string(),
   "purpose": zod.string(),
   "decision": zod.string(),
@@ -62,7 +70,7 @@ export const AnalyzeQuestionResponse = zod.object({
   "methodology": zod.string(),
   "items": zod.array(zod.object({
   "id": zod.string(),
-  "source": zod.enum(['user_input', 'conversation_history', 'memory']),
+  "source": zod.enum(['user_input', 'conversation_history', 'memory', 'knowledge_base']),
   "text": zod.string(),
   "relevance_score": zod.number(),
   "quality_score": zod.number(),

@@ -55,6 +55,7 @@ export const EvidenceItemSource = {
   user_input: 'user_input',
   conversation_history: 'conversation_history',
   memory: 'memory',
+  knowledge_base: 'knowledge_base',
 } as const;
 
 export interface EvidenceItem {
@@ -238,6 +239,36 @@ export interface DecisionOption {
   evidence_ids: string[];
 }
 
+export type IntentRouteType = typeof IntentRouteType[keyof typeof IntentRouteType];
+
+
+export const IntentRouteType = {
+  explanatory: 'explanatory',
+  decision: 'decision',
+  summary: 'summary',
+  comparison: 'comparison',
+  general: 'general',
+} as const;
+
+export type IntentRoutePipeline = typeof IntentRoutePipeline[keyof typeof IntentRoutePipeline];
+
+
+export const IntentRoutePipeline = {
+  explanation: 'explanation',
+  decision: 'decision',
+  summary: 'summary',
+  comparison: 'comparison',
+  general: 'general',
+} as const;
+
+export interface IntentRoute {
+  type: IntentRouteType;
+  confidence: number;
+  rationale: string;
+  signals: string[];
+  pipeline: IntentRoutePipeline;
+}
+
 export type DecisionMatrixCriteriaWeights = {[key: string]: number};
 
 export interface DecisionMatrix {
@@ -363,6 +394,7 @@ export type PCAStateTraceItem = { [key: string]: unknown };
 export interface PCAState {
   user_input: string;
   language: PCAStateLanguage;
+  intent: IntentRoute;
   understanding: string;
   purpose: string;
   decision: string;

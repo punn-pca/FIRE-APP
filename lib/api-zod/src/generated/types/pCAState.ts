@@ -9,6 +9,7 @@ import type { ConfidenceReport } from './confidenceReport';
 import type { DataflowEdge } from './dataflowEdge';
 import type { DecisionMatrix } from './decisionMatrix';
 import type { EvidenceReport } from './evidenceReport';
+import type { IntentRoute } from './intentRoute';
 import type { LogicalVerification } from './logicalVerification';
 import type { MemoryRetrievalReport } from './memoryRetrievalReport';
 import type { ModuleAudit } from './moduleAudit';
@@ -29,6 +30,7 @@ import type { VerificationReport } from './verificationReport';
 export interface PCAState {
   user_input: string;
   language: PCAStateLanguage;
+  intent: IntentRoute;
   understanding: string;
   purpose: string;
   decision: string;

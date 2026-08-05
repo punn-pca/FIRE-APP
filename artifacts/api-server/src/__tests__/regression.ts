@@ -13,6 +13,7 @@ import {
   buildWorkingMemory,
   analyzeConflictFindings,
   buildEvidenceReport,
+  buildKnowledgeMap,
   buildConfidenceReport,
   buildVerificationReport,
   buildDecisionMatrix,
@@ -20,6 +21,8 @@ import {
   buildReasoningGraph,
   buildStateTransitions,
   buildSystemPrompt,
+  buildVerifiedFallback,
+  classifyIntent,
   type PCAState,
   type ConversationTurn,
   type ContextValidation,
@@ -211,10 +214,59 @@ describe("buildEvidenceReport — irrelevant short history is excluded", () => {
   );
 });
 
+describe("Intent Router — explanatory and decision routes", () => {
+  const explanatory = classifyIntent("รักคืออะไร");
+  assert("รักคืออะไร is explanatory", explanatory.type === "explanatory");
+  assert("Explanatory route uses explanation pipeline", explanatory.pipeline === "explanation");
+
+  const report = buildEvidenceReport("รักคืออะไร", [], []);
+  assert(
+    "Explanatory route adds curated knowledge",
+    report.items.some((item) => item.source === "knowledge_base")
+  );
+  assert(
+    "Explanatory knowledge does not echo the question",
+    !report.items.some((item) => item.source === "knowledge_base" && item.text === "รักคืออะไร")
+  );
+
+  const explanatoryState = makeVerificationState();
+  explanatoryState.intent = explanatory;
+  explanatoryState.evidence_report = report;
+  explanatoryState.decision_matrix = buildDecisionMatrix(explanatoryState, 0.8);
+  const explanatoryFallback = buildVerifiedFallback(explanatoryState);
+  assert("Explanatory route has no decision alternatives", explanatoryState.decision_matrix.options.length === 0);
+  assert("Explanatory fallback does not recommend phased action", !explanatoryFallback.includes("ดำเนินการเป็นระยะ"));
+  assert("Explanatory fallback contains a meaning conclusion", explanatoryFallback.includes("ความหมาย"));
+  assert(
+    "Explanatory fallback passes route-aware logical verification",
+    buildLogicalVerification(explanatoryState, explanatoryFallback).status === "ผ่าน"
+  );
+
+  const knowledgeMap = buildKnowledgeMap(explanatoryState, {
+    richness: "thin",
+    missingSignals: [],
+  });
+  assert(
+    "Knowledge map does not echo the question as a fact",
+    !knowledgeMap.facts.includes("ข้อมูลที่ผู้ใช้ระบุ: รักคืออะไร")
+  );
+
+  const decision = classifyIntent("ควรลงทุนในหุ้นไหม");
+  assert("Investment question is decision", decision.type === "decision");
+  assert("Decision route uses decision pipeline", decision.pipeline === "decision");
+});
+
 function makeVerificationState(): PCAState {
   return {
     user_input: "ช่วยวิเคราะห์ทางเลือก",
     language: "th",
+    intent: {
+      type: "decision",
+      confidence: 0.88,
+      rationale: "test decision route",
+      signals: ["decision marker"],
+      pipeline: "decision",
+    },
     observations: [],
     understanding: "",
     purpose: "",
@@ -245,6 +297,15 @@ function makeVerificationState(): PCAState {
         consistency_score: 1,
         composite_score: 0.8,
         basis: [],
+      }, {
+        id: "evidence-knowledge",
+        source: "knowledge_base",
+        text: "ข้อมูลจาก knowledge base",
+        relevance_score: 0.9,
+        quality_score: 0.8,
+        consistency_score: 1,
+        composite_score: 0.86,
+        basis: ["curated conceptual knowledge"],
       }],
       aggregate_score: 0.8,
       coverage_score: 1,
@@ -346,7 +407,7 @@ describe("buildVerificationReport — substantive checks", () => {
   );
   const grounded = buildVerificationReport(
     state,
-    "[ข้อเท็จจริง]\nโครงการมีงบประมาณจำกัดตามข้อมูลจากผู้ใช้ [หลักฐาน: evidence-input]\n" +
+      "[ข้อเท็จจริง]\nโครงการมีข้อมูลสนับสนุนจาก knowledge base [หลักฐาน: evidence-knowledge]\n" +
       "[สมมติฐาน]\nอาจต้องแบ่งการลงทุนเป็นระยะ\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
   );
   assert("Keyword-only answer does not pass evidence alignment", generic.detailed_checks.find(
@@ -390,7 +451,8 @@ describe("buildSystemPrompt — computed controls are injected", () => {
     { richness: "moderate", missingSignals: [] },
     []
   );
-  assert("Prompt includes evidence id", prompt.includes("[หลักฐาน: evidence-input]"));
+  assert("Prompt includes supported evidence id", prompt.includes("[หลักฐาน: evidence-knowledge]"));
+  assert("Prompt excludes user input as evidence", !prompt.includes("[หลักฐาน: evidence-input]"));
   assert("Prompt includes decision output", prompt.includes("เสนอทางเลือก"));
 });
 
@@ -421,7 +483,7 @@ describe("buildLogicalVerification — grounding and decision alignment", () => 
       rationale: "ลดความเสี่ยง",
       criteria: { evidence_alignment: 0.8 },
       weighted_score: 0.8,
-      evidence_ids: ["evidence-input"],
+        evidence_ids: ["evidence-knowledge"],
     }],
     selected_option: "option-phased",
     selected_score: 0.8,
@@ -429,7 +491,7 @@ describe("buildLogicalVerification — grounding and decision alignment", () => 
   };
   const result = buildLogicalVerification(
     state,
-    "[ข้อเท็จจริง]\nข้อมูลจากผู้ใช้ [หลักฐาน: evidence-input]\n" +
+      "[ข้อเท็จจริง]\nข้อมูลจาก knowledge base [หลักฐาน: evidence-knowledge]\n" +
       "[สมมติฐาน]\nอาจมีข้อมูลที่ขาด\nข้อสรุป: ดำเนินการเป็นระยะ\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
   );
   assert("Grounded evidence passes logical verification", result.checks.find(
@@ -441,6 +503,21 @@ describe("buildLogicalVerification — grounding and decision alignment", () => 
   assert("Logical verification is not keyword-only", result.checks.some(
     (check) => check.criterion === "fact_conclusion_consistency"
   ));
+
+  const noSupportedEvidenceState = makeVerificationState();
+  noSupportedEvidenceState.evidence_report.items = noSupportedEvidenceState.evidence_report.items
+    .filter((item) => item.source === "user_input");
+  const noSupportedEvidenceResult = buildLogicalVerification(
+    noSupportedEvidenceState,
+    "[ข้อเท็จจริง]\nยังไม่มีหลักฐานภายนอก\n" +
+      "[สมมติฐาน]\nข้อมูลอาจไม่ครบ\n" +
+      "[ข้อสรุป]\nควรเก็บข้อมูลเพิ่มก่อนตัดสินใจ\n" +
+      "ผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
+  );
+  assert(
+    "No supported evidence is a valid zero-citation state",
+    noSupportedEvidenceResult.checks.find((check) => check.criterion === "evidence_grounding")?.score === 1
+  );
 });
 
 describe("buildReasoningGraph — claims connect evidence to decision", () => {
@@ -454,7 +531,7 @@ describe("buildReasoningGraph — claims connect evidence to decision", () => {
       rationale: "ลดความเสี่ยง",
       criteria: { evidence_alignment: 0.8 },
       weighted_score: 0.8,
-      evidence_ids: ["evidence-input"],
+       evidence_ids: ["evidence-knowledge"],
     }],
     selected_option: "option-phased",
     selected_score: 0.8,

@@ -95,7 +95,7 @@ components:
         id: { type: string }
         source:
           type: string
-          enum: [user_input, conversation_history, memory]
+          enum: [user_input, conversation_history, memory, knowledge_base]
         text: { type: string }
         relevance_score: { type: number }
         quality_score: { type: number }
@@ -258,6 +258,15 @@ components:
         weighted_score: { type: number }
         evidence_ids: { type: array, items: { type: string } }
       required: [id, label, rationale, criteria, weighted_score, evidence_ids]
+    IntentRoute:
+      type: object
+      properties:
+        type: { type: string, enum: [explanatory, decision, summary, comparison, general] }
+        confidence: { type: number }
+        rationale: { type: string }
+        signals: { type: array, items: { type: string } }
+        pipeline: { type: string, enum: [explanation, decision, summary, comparison, general] }
+      required: [type, confidence, rationale, signals, pipeline]
     DecisionMatrix:
       type: object
       properties:
@@ -324,6 +333,7 @@ components:
       properties:
         user_input: { type: string }
         language: { type: string, enum: [th, en] }
+        intent: { $ref: "#/components/schemas/IntentRoute" }
         understanding: { type: string }
         purpose: { type: string }
         decision: { type: string }
@@ -354,7 +364,7 @@ components:
         governance: { type: object, additionalProperties: true }
         knowledge_map: { type: object, additionalProperties: true }
         trace: { type: array, items: { type: object, additionalProperties: true } }
-      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_quality, runtime_summary, reasoning_graph, state_transitions, verification]
+      required: [user_input, language, intent, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_quality, runtime_summary, reasoning_graph, state_transitions, verification]
     AnalyzeResponse:
       type: object
       properties:
