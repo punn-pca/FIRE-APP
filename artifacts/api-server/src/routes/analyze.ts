@@ -49,12 +49,67 @@ interface GovernanceReport {
   human_agency_preserved: boolean;
 }
 
+export interface EvidenceItem {
+  id: string;
+  source: "user_input" | "conversation_history" | "memory";
+  text: string;
+  relevance_score: number;
+  quality_score: number;
+  consistency_score: number;
+  composite_score: number;
+  basis: string[];
+}
+
+export interface EvidenceReport {
+  methodology: string;
+  items: EvidenceItem[];
+  aggregate_score: number;
+  coverage_score: number;
+}
+
+export interface ConflictFinding {
+  id: string;
+  type: "reversal" | "inconsistency";
+  severity: "ต่ำ" | "ปานกลาง" | "สูง";
+  current_signal: string;
+  prior_signal: string;
+  evidence: string;
+  score: number;
+}
+
+export interface VerificationCheck {
+  criterion: string;
+  rule: string;
+  passed: boolean;
+  evidence: string;
+  score: number;
+}
+
+export interface ConfidenceReport {
+  score: number;
+  band: PCAState["confidence"];
+  method: string;
+  components: Record<string, number>;
+  verification_score: number;
+}
+
+export interface ModuleAudit {
+  module: string;
+  algorithm: string;
+  input_count: number;
+  score?: number;
+  findings: string[];
+  calculations: Record<string, number | string | boolean>;
+}
+
 interface VerificationReport {
   status: "ผ่าน" | "ต้องตรวจสอบ";
   consistency: "สอดคล้อง" | "ต้องทบทวน";
   expected: string[];
   observed: string[];
   checks: string[];
+  detailed_checks: VerificationCheck[];
+  score: number;
 }
 
 interface KnowledgeMap {
@@ -75,7 +130,13 @@ export interface PCAState {
   understanding: string;
   purpose: string;
   constraints: string[];
-  memories: Array<{ content: string; layer: string; source: string; confidence: number }>;
+  memories: Array<{
+    content: string;
+    layer: string;
+    source: string;
+    confidence: number;
+    retrieval_score?: number;
+  }>;
   hypotheses: Array<{ claim: string; confidence: number }>;
   evidence: string[];
   critique: string[];
@@ -88,7 +149,11 @@ export interface PCAState {
   notes: string[];
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   conflicts: string[];
+  conflict_findings: ConflictFinding[];
   missing_info: string[];
+  evidence_report: EvidenceReport;
+  confidence_report: ConfidenceReport;
+  module_audit: ModuleAudit[];
   runtime_lifecycle: RuntimeEvent[];
   governance: GovernanceReport;
   verification: VerificationReport;
@@ -183,6 +248,223 @@ function recordRuntime(
   });
 }
 
+function tokenize(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const tokens: string[] = [];
+  const thaiStopBigrams = new Set([
+    "การ", "ของ", "ที่", "มี", "ไม่", "และ", "ใน", "กับ", "เป็น", "จาก",
+    "ให้", "ได้", "ว่า", "นี้", "จะ", "ต้อง", "หรือ", "อีก", "โดย", "เพื่อ",
+    "ความ", "แล้ว", "แต่", "ตาม", "เมื่อ", "อย่าง", "อาจ", "ควร",
+  ]);
+  for (const segment of normalized.match(/[\u0E00-\u0E7F]+|[a-z0-9]+/gi) ?? []) {
+    if (/^[\u0E00-\u0E7F]+$/.test(segment)) {
+      // Thai has no reliable whitespace token boundaries. Character bigrams
+      // preserve shared terms across inflected/compound phrases.
+      for (let i = 0; i < segment.length - 1; i++) {
+        const bigram = segment.slice(i, i + 2);
+        if (!thaiStopBigrams.has(bigram)) tokens.push(bigram);
+      }
+    } else {
+      tokens.push(segment);
+    }
+  }
+  return [...new Set(tokens)];
+}
+
+function overlapScore(query: string, candidate: string): number {
+  const queryTokens = tokenize(query);
+  const candidateTokens = new Set(tokenize(candidate));
+  if (queryTokens.length === 0 || candidateTokens.size === 0) return 0;
+  return Number(
+    (queryTokens.filter((token) => candidateTokens.has(token)).length / queryTokens.length).toFixed(3)
+  );
+}
+
+const MEMORY_RELEVANCE_THRESHOLD = 0.25;
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+export function analyzeConflictFindings(
+  question: string,
+  history: ConversationTurn[]
+): ConflictFinding[] {
+  const prevAssistant = history.filter((h) => h.role === "assistant").slice(-3);
+  const findings: ConflictFinding[] = [];
+  const reversalPatterns = [
+    { type: "reversal" as const, a: /แนะนำ|ควร(?!จะ)|เหมาะสม/i, b: /ไม่แนะนำ|ไม่ควร|ไม่เหมาะสม/i },
+    { type: "reversal" as const, a: /ปลอดภัย|เชื่อถือได้/i, b: /ไม่ปลอดภัย|เชื่อถือไม่ได้/i },
+    { type: "reversal" as const, a: /ดีกว่า|เหนือกว่า/i, b: /แย่กว่า|ด้อยกว่า/i },
+  ];
+
+  for (const [index, prev] of prevAssistant.entries()) {
+    for (const pattern of reversalPatterns) {
+      const prevSaysA = pattern.a.test(prev.content) && !pattern.b.test(prev.content);
+      const questionSaysB = pattern.b.test(question);
+      const prevSaysB = pattern.b.test(prev.content) && !pattern.a.test(prev.content);
+      const questionSaysA = pattern.a.test(question);
+      if ((prevSaysA && questionSaysB) || (prevSaysB && questionSaysA)) {
+        findings.push({
+          id: `conflict-${index + 1}`,
+          type: pattern.type,
+          severity: "ปานกลาง",
+          current_signal: question.slice(0, 120),
+          prior_signal: prev.content.slice(0, 160),
+          evidence: "พบสัญญาณเชิงบวกและเชิงลบต่อประเด็นเดียวกันจากข้อความต่างช่วง",
+          score: 0.65,
+        });
+        break;
+      }
+    }
+  }
+  return findings;
+}
+
+export function buildEvidenceReport(
+  question: string,
+  history: ConversationTurn[],
+  memories: PCAState["memories"],
+  conflictFindings: ConflictFinding[] = []
+): EvidenceReport {
+  const items: EvidenceItem[] = [];
+  const addItem = (
+    id: string,
+    source: EvidenceItem["source"],
+    text: string,
+    relevance_score: number,
+    quality_score: number,
+    basis: string[]
+  ) => {
+    const consistency_score = clamp01(1 - conflictFindings.length * 0.15);
+    const composite_score = Number(
+      (relevance_score * 0.45 + quality_score * 0.35 + consistency_score * 0.2).toFixed(3)
+    );
+    items.push({
+      id,
+      source,
+      text: text.slice(0, 240),
+      relevance_score: Number(relevance_score.toFixed(3)),
+      quality_score: Number(quality_score.toFixed(3)),
+      consistency_score: Number(consistency_score.toFixed(3)),
+      composite_score,
+      basis,
+    });
+  };
+
+  addItem(
+    "evidence-input",
+    "user_input",
+    question,
+    1,
+    question.trim().length >= 55 ? 0.8 : question.trim().length >= 20 ? 0.6 : 0.35,
+    ["แหล่งข้อมูลโดยตรงจากคำถาม", "ไม่มีการตรวจสอบจากแหล่งภายนอก"]
+  );
+
+  history.slice(-6).forEach((turn, index) => {
+    const relevance = overlapScore(question, turn.content);
+    if (relevance > 0 || history.length <= 2) {
+      addItem(
+        `evidence-history-${index + 1}`,
+        "conversation_history",
+        turn.content,
+        relevance,
+        0.55,
+        ["ข้อความจาก conversation memory", `role=${turn.role}`, "ความเกี่ยวข้องคำนวณจาก token overlap"]
+      );
+    }
+  });
+
+  memories
+    .map((memory, index) => ({
+      memory,
+      relevance: overlapScore(question, memory.content),
+      index,
+    }))
+    .filter(({ relevance }) => relevance >= MEMORY_RELEVANCE_THRESHOLD)
+    .forEach(({ memory, relevance, index }) => {
+      addItem(
+        `evidence-memory-${index + 1}`,
+        "memory",
+        memory.content,
+        relevance,
+        clamp01(memory.confidence),
+        ["ข้อมูลจาก long-term memory", `confidence=${memory.confidence}`, "ความเกี่ยวข้องคำนวณจาก token overlap"]
+      );
+    });
+
+  const aggregate_score = items.length
+    ? Number((items.reduce((sum, item) => sum + item.composite_score, 0) / items.length).toFixed(3))
+    : 0;
+  const coverage_score = Number(
+    clamp01(
+      (items.filter((item) => item.source !== "user_input" && item.relevance_score > 0).length + 1) /
+      (history.length > 0 || memories.length > 0 ? 3 : 1)
+    ).toFixed(3)
+  );
+  return {
+    methodology: "composite = relevance×0.45 + source_quality×0.35 + consistency×0.20; relevance ใช้ token overlap",
+    items,
+    aggregate_score,
+    coverage_score,
+  };
+}
+
+export function buildConfidenceReport(
+  state: PCAState,
+  verificationScore = 0
+): ConfidenceReport {
+  const contextScore = state.notes.some((note) => note.includes("context"))
+    ? 0.5
+    : state.knowledge_map.unknowns.length === 0
+      ? 1
+      : 0.45;
+  const inputScore = clamp01(state.user_input.trim().length / 55);
+  const historyScore = clamp01(state.memories.length > 0 ? 0.75 : state.evidence_report.items.some(
+    (item) => item.source === "conversation_history"
+  ) ? 0.6 : 0);
+  const memoryScore = clamp01(
+    state.memories.length === 0
+      ? 0
+      : state.memories.reduce((sum, memory) => sum + (memory.retrieval_score ?? 0), 0) / state.memories.length
+  );
+  const evidenceScore = state.evidence_report.aggregate_score;
+  const conflictPenalty = clamp01(state.conflict_findings.length * 0.2);
+  const missingPenalty = clamp01(state.missing_info.length * 0.15);
+  const score = Number(
+    (100 * clamp01(
+      inputScore * 0.15 +
+      contextScore * 0.15 +
+      historyScore * 0.1 +
+      memoryScore * 0.1 +
+      evidenceScore * 0.25 +
+      verificationScore * 0.25 -
+      conflictPenalty * 0.1 -
+      missingPenalty * 0.1
+    )).toFixed(1)
+  );
+  const band: PCAState["confidence"] =
+    score >= 75 ? "สูง" :
+    score >= 50 ? "ปานกลาง" :
+    score >= 25 ? "ต่ำ" :
+    "ไม่สามารถประเมินได้";
+  return {
+    score,
+    band,
+    method: "input 15% + context 15% + history 10% + memory 10% + evidence 25% + verification 25% − conflict/missing penalties",
+    components: {
+      input_quality: Number(inputScore.toFixed(3)),
+      context_quality: Number(contextScore.toFixed(3)),
+      history_support: Number(historyScore.toFixed(3)),
+      memory_support: Number(memoryScore.toFixed(3)),
+      evidence_quality: evidenceScore,
+      conflict_penalty: Number(conflictPenalty.toFixed(3)),
+      missing_information_penalty: Number(missingPenalty.toFixed(3)),
+    },
+    verification_score: Number(verificationScore.toFixed(3)),
+  };
+}
+
 function buildGovernanceReport(
   context: ContextValidation,
   conflicts: string[]
@@ -232,11 +514,22 @@ function buildVerificationReport(
   responseText: string
 ): VerificationReport {
   const checks: string[] = [];
+  const detailed_checks: VerificationCheck[] = [];
   const hasFactLabel = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText);
   const hasAssumptionLabel = /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
   const preservesAgency = /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
     responseText
   );
+  const surfacesMissingInfo =
+    state.missing_info.length === 0 ||
+    state.missing_info.some((missing) => responseText.includes(missing)) ||
+    /\[ข้อมูลที่ขาด\]|\[missing information\]|ข้อมูลที่ต้องการเพิ่ม/i.test(responseText);
+  const acknowledgesEvidence =
+    state.evidence_report.items.length === 0 ||
+    /\[ข้อเท็จจริง\]|\[fact\]|หลักฐาน|evidence/i.test(responseText);
+  const acknowledgesConflicts =
+    state.conflict_findings.length === 0 ||
+    /ขัดแย้ง|ทบทวน|สอดคล้อง|conflict|consistency|review/i.test(responseText);
 
   checks.push(
     hasFactLabel
@@ -257,10 +550,60 @@ function buildVerificationReport(
     checks.push("มีข้อมูลที่ขาดและถูกส่งต่อเพื่อให้ผู้ใช้ตรวจสอบ");
   }
 
-  const allCoreChecksPass = hasFactLabel && hasAssumptionLabel && preservesAgency;
+  detailed_checks.push(
+    {
+      criterion: "fact_label",
+      rule: "response ต้องมี [ข้อเท็จจริง] หรือ [Fact]",
+      passed: hasFactLabel,
+      evidence: hasFactLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด",
+      score: hasFactLabel ? 1 : 0,
+    },
+    {
+      criterion: "assumption_label",
+      rule: "response ต้องมี [สมมติฐาน] หรือ [Assumption]",
+      passed: hasAssumptionLabel,
+      evidence: hasAssumptionLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด",
+      score: hasAssumptionLabel ? 1 : 0,
+    },
+    {
+      criterion: "human_agency",
+      rule: "response ต้องยืนยันว่าผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย",
+      passed: preservesAgency,
+      evidence: preservesAgency ? "พบข้อความรักษา Human Agency" : "ไม่พบข้อความยืนยัน",
+      score: preservesAgency ? 1 : 0,
+    },
+    {
+      criterion: "missing_information",
+      rule: "เมื่อมีข้อมูลขาด ต้องระบุข้อมูลนั้นหรือใช้ label [ข้อมูลที่ขาด]",
+      passed: surfacesMissingInfo,
+      evidence: surfacesMissingInfo ? "response สะท้อนข้อมูลที่ขาด" : "ไม่พบข้อมูลที่ขาดใน response",
+      score: surfacesMissingInfo ? 1 : 0,
+    },
+    {
+      criterion: "evidence_alignment",
+      rule: "response ต้องอ้างถึงหลักฐานหรือข้อเท็จจริงที่ pipeline ประเมินไว้",
+      passed: acknowledgesEvidence,
+      evidence: acknowledgesEvidence
+        ? `เชื่อมกับ evidence ${state.evidence_report.items.length} รายการ`
+        : "ไม่พบการอ้างหลักฐาน",
+      score: acknowledgesEvidence ? 1 : 0,
+    },
+    {
+      criterion: "conflict_acknowledgement",
+      rule: "เมื่อพบ conflict ต้องมีข้อความให้ทบทวนความสอดคล้อง",
+      passed: acknowledgesConflicts,
+      evidence: acknowledgesConflicts
+        ? "response สะท้อนสถานะความสอดคล้อง"
+        : "ไม่พบการกล่าวถึง conflict",
+      score: acknowledgesConflicts ? 1 : 0,
+    }
+  );
+
+  const score = detailed_checks.reduce((sum, check) => sum + check.score, 0) / detailed_checks.length;
+  const allCoreChecksPass = detailed_checks.every((check) => check.passed);
   const consistent = state.conflicts.length === 0;
   return {
-    status: allCoreChecksPass && consistent ? "ผ่าน" : "ต้องตรวจสอบ",
+    status: allCoreChecksPass && consistent && score >= 0.8 ? "ผ่าน" : "ต้องตรวจสอบ",
     consistency: consistent ? "สอดคล้อง" : "ต้องทบทวน",
     expected: [
       "แยกข้อเท็จจริง สมมติฐาน และข้อมูลที่ขาด",
@@ -273,6 +616,8 @@ function buildVerificationReport(
       preservesAgency ? "รักษา Human Agency" : "ต้องตรวจสอบ Human Agency",
     ],
     checks,
+    detailed_checks,
+    score: Number(score.toFixed(3)),
   };
 }
 
@@ -404,17 +749,48 @@ export function calculateConfidence(
 // ─── Cognitive Stages ─────────────────────────────────────────────────────────
 
 function stageObservation(state: PCAState) {
+  const tokens = tokenize(state.user_input);
+  const charCount = state.user_input.trim().length;
   state.observations.push(state.user_input.trim());
   state.language = detectLanguage(state.user_input);
-  record(state, "OBSERVATION", { observations: state.observations });
+  state.module_audit.push({
+    module: "Observation",
+    algorithm: "language detection + Unicode tokenization + input completeness counters",
+    input_count: 1,
+    score: Number(clamp01(charCount / 55).toFixed(3)),
+    findings: [
+      `ตรวจพบภาษา: ${state.language}`,
+      `ความยาว input: ${charCount} ตัวอักษร`,
+      `จำนวน token ที่ไม่ซ้ำ: ${tokens.length}`,
+    ],
+    calculations: {
+      character_count: charCount,
+      unique_token_count: tokens.length,
+      thai_detected: state.language === "th",
+      completeness_score: Number(clamp01(charCount / 55).toFixed(3)),
+    },
+  });
+  record(state, "OBSERVATION", {
+    observations: state.observations,
+    character_count: charCount,
+    unique_token_count: tokens.length,
+    detected_language: state.language,
+  });
 }
 
 function stageUnderstanding(state: PCAState) {
   const input = state.user_input.toLowerCase();
-  const isDecision = /ตัดสินใจ|เลือก|decision|choose/i.test(input);
-  const isComparison = /เปรียบเทียบ|เทียบ|compare|vs|ดีกว่า/i.test(input);
-  const isPhilosophy = /ปรัชญา|จริยธรรม|philosophy|ethics|moral/i.test(input);
-  const isAI = /ai|ปัญญาประดิษฐ์|alignment|safety|agi/i.test(input);
+  const intentScores = {
+    decision: (input.match(/ตัดสินใจ|เลือก|decision|choose/gi) ?? []).length,
+    comparison: (input.match(/เปรียบเทียบ|เทียบ|compare|vs|ดีกว่า/gi) ?? []).length,
+    philosophy: (input.match(/ปรัชญา|จริยธรรม|philosophy|ethics|moral/gi) ?? []).length,
+    ai_safety: (input.match(/ai|ปัญญาประดิษฐ์|alignment|safety|agi/gi) ?? []).length,
+  };
+  const [selectedIntent] = Object.entries(intentScores).sort(([, a], [, b]) => b - a);
+  const isDecision = intentScores.decision > 0;
+  const isComparison = intentScores.comparison > 0;
+  const isPhilosophy = intentScores.philosophy > 0;
+  const isAI = intentScores.ai_safety > 0;
 
   if (isDecision) {
     state.understanding =
@@ -442,7 +818,28 @@ function stageUnderstanding(state: PCAState) {
         ? "ผู้ใช้ต้องการวิเคราะห์และประเมินข้อมูล เพื่อทำความเข้าใจสถานการณ์และหาแนวทาง"
         : "The user wants to analyze information to clarify context and find the best way forward.";
   }
-  record(state, "UNDERSTANDING", { understanding: state.understanding });
+  state.module_audit.push({
+    module: "Understanding",
+    algorithm: "keyword feature scoring with deterministic priority classification",
+    input_count: tokenize(state.user_input).length,
+    score: selectedIntent?.[1] ? Number(clamp01(selectedIntent[1] / 3).toFixed(3)) : 0,
+    findings: [
+      `intent ที่มีคะแนนสูงสุด: ${selectedIntent?.[0] ?? "general"}`,
+      `คะแนน intent: ${selectedIntent?.[1] ?? 0}`,
+    ],
+    calculations: {
+      selected_intent: selectedIntent?.[0] ?? "general",
+      decision_score: intentScores.decision,
+      comparison_score: intentScores.comparison,
+      philosophy_score: intentScores.philosophy,
+      ai_safety_score: intentScores.ai_safety,
+    },
+  });
+  record(state, "UNDERSTANDING", {
+    understanding: state.understanding,
+    intent_scores: intentScores,
+    selected_intent: selectedIntent?.[0] ?? "general",
+  });
 }
 
 function stagePurpose(state: PCAState) {
@@ -462,8 +859,39 @@ function stagePurpose(state: PCAState) {
 }
 
 function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]) {
-  state.memories = memoryItems.slice(0, 5);
-  record(state, "MEMORY", { retrieved: state.memories.length });
+  const ranked = memoryItems
+    .map((memory) => ({
+      ...memory,
+      retrieval_score: overlapScore(state.user_input, memory.content),
+    }))
+    .sort((a, b) => (b.retrieval_score ?? 0) - (a.retrieval_score ?? 0));
+  state.memories = ranked
+    .filter((memory) => (memory.retrieval_score ?? 0) >= MEMORY_RELEVANCE_THRESHOLD)
+    .slice(0, 5);
+  const averageScore = state.memories.length
+    ? state.memories.reduce((sum, memory) => sum + (memory.retrieval_score ?? 0), 0) / state.memories.length
+    : 0;
+  state.module_audit.push({
+    module: "Memory Retrieval",
+    algorithm: "ranked lexical retrieval: unique token overlap(query, memory)",
+    input_count: memoryItems.length,
+    score: Number(averageScore.toFixed(3)),
+    findings: state.memories.length > 0
+      ? state.memories.map((memory, index) => `อันดับ ${index + 1}: score ${(memory.retrieval_score ?? 0).toFixed(3)}`)
+      : ["ไม่พบ memory ที่มี token ร่วมกับคำถาม"],
+    calculations: {
+      candidate_count: memoryItems.length,
+      retrieved_count: state.memories.length,
+      average_retrieval_score: Number(averageScore.toFixed(3)),
+      top_score: Number((state.memories[0]?.retrieval_score ?? 0).toFixed(3)),
+    },
+  });
+  record(state, "MEMORY", {
+    retrieved: state.memories.length,
+    candidates: memoryItems.length,
+    ranked_scores: state.memories.map((memory) => memory.retrieval_score),
+    algorithm: "token_overlap",
+  });
 }
 
 function stageMentalModel(state: PCAState) {
@@ -493,26 +921,49 @@ function stageHypotheses(state: PCAState) {
   record(state, "HYPOTHESIS", { hypotheses: state.hypotheses });
 }
 
-function stageEvidenceEvaluation(state: PCAState, history: ConversationTurn[]) {
-  state.evidence = [
-    state.language === "th"
-      ? "หลักฐานเชิงประจักษ์จากข้อมูลที่ผู้ใช้ระบุมาในคำถาม"
-      : "Empirical evidence from user-provided input",
-    state.language === "th"
-      ? "หลักฐานอ้างอิงจากฐานความรู้และมาตรฐานสากลที่เกี่ยวข้อง"
-      : "Evidence from established knowledge base and international standards",
-  ];
-  if (history.length > 0) {
-    state.evidence.push(
-      state.language === "th"
-        ? `บริบทจากประวัติการสนทนา (${history.length} รายการ)`
-        : `Context from conversation history (${history.length} turns)`
-    );
-  }
-  record(state, "EVIDENCE_EVALUATION", { evidence: state.evidence, history_turns: history.length });
+function stageEvidenceEvaluation(
+  state: PCAState,
+  history: ConversationTurn[]
+) {
+  state.evidence_report = buildEvidenceReport(
+    state.user_input,
+    history,
+    state.memories,
+    state.conflict_findings
+  );
+  state.evidence = state.evidence_report.items.map(
+    (item) => `[${item.source}] ${item.text} (score=${item.composite_score})`
+  );
+  state.module_audit.push({
+    module: "Evidence Evaluation",
+    algorithm: state.evidence_report.methodology,
+    input_count: state.evidence_report.items.length,
+    score: state.evidence_report.aggregate_score,
+    findings: [
+      `หลักฐานทั้งหมด ${state.evidence_report.items.length} รายการ`,
+      `คะแนนรวมเฉลี่ย ${state.evidence_report.aggregate_score}`,
+      `coverage ${state.evidence_report.coverage_score}`,
+    ],
+    calculations: {
+      aggregate_score: state.evidence_report.aggregate_score,
+      coverage_score: state.evidence_report.coverage_score,
+      user_input_items: state.evidence_report.items.filter((item) => item.source === "user_input").length,
+      history_items: state.evidence_report.items.filter((item) => item.source === "conversation_history").length,
+      memory_items: state.evidence_report.items.filter((item) => item.source === "memory").length,
+    },
+  });
+  record(state, "EVIDENCE_EVALUATION", {
+    evidence: state.evidence,
+    evidence_report: state.evidence_report,
+    history_turns: history.length,
+  });
 }
 
-function stageCritique(state: PCAState, context: ContextValidation) {
+function stageCritique(
+  state: PCAState,
+  context: ContextValidation,
+  conflictFindings: ConflictFinding[]
+) {
   state.critique = [
     state.language === "th"
       ? "ข้อจำกัด: การวิเคราะห์นี้ตั้งอยู่บนข้อมูลที่ผู้ใช้ให้มา หากข้อมูลไม่ครบถ้วนอาจส่งผลต่อความแม่นยำ"
@@ -538,10 +989,32 @@ function stageCritique(state: PCAState, context: ContextValidation) {
       ? `ระดับความไม่แน่นอน: ${uncertaintyLevel} — ขึ้นอยู่กับตัวแปรบริบทที่ยังไม่ได้รับการยืนยัน`
       : `Uncertainty Level: ${uncertaintyLevel === "สูง" ? "High" : "Medium"} — depends on unconfirmed contextual variables.`,
   ];
+  state.module_audit.push({
+    module: "Critique",
+    algorithm: "missing-signal detection + conflict severity aggregation + uncertainty penalty",
+    input_count: state.evidence_report.items.length,
+    score: Number(clamp01(
+      1 - context.missingSignals.length * 0.2 - conflictFindings.length * 0.2
+    ).toFixed(3)),
+    findings: [
+      `missing signals: ${context.missingSignals.length}`,
+      `conflict findings: ${conflictFindings.length}`,
+      `uncertainty: ${uncertaintyLevel}`,
+    ],
+    calculations: {
+      missing_signal_count: context.missingSignals.length,
+      conflict_count: conflictFindings.length,
+      uncertainty_level: uncertaintyLevel,
+      critique_quality_score: Number(clamp01(
+        1 - context.missingSignals.length * 0.2 - conflictFindings.length * 0.2
+      ).toFixed(3)),
+    },
+  });
   record(state, "CRITIQUE", {
     critique: state.critique,
     uncertainty: state.uncertainty,
     missing_info: state.missing_info,
+    conflict_findings: conflictFindings,
   });
 }
 
@@ -550,20 +1023,46 @@ function stageDecision(
   history: ConversationTurn[],
   memories: PCAState["memories"],
   context: ContextValidation,
-  conflicts: string[]
+  conflicts: string[],
+  conflictFindings: ConflictFinding[]
 ) {
   state.decision =
     state.language === "th"
       ? "เสนอข้อสรุปเชิงยุทธศาสตร์ที่แยกแยะระหว่างข้อเท็จจริงและการตีความ พร้อมระบุขอบเขตและข้อจำกัด"
       : "Present strategic conclusions distinguishing facts from interpretations, with explicit scope and limitations.";
 
-  // 8. Evidence-based confidence
-  state.confidence = calculateConfidence(state.user_input, history, memories, context, conflicts);
   state.conflicts = conflicts;
+  state.conflict_findings = conflictFindings;
+  const evidenceScore = state.evidence_report.aggregate_score;
+  const critiqueScore = state.module_audit.find((audit) => audit.module === "Critique")?.score ?? 0;
+  const aggregationScore = Number(
+    (evidenceScore * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
+  );
+  state.confidence_report = buildConfidenceReport(state, 0);
+  state.confidence = state.confidence_report.band;
+  state.module_audit.push({
+    module: "Decision",
+    algorithm: "weighted aggregation: evidence×0.60 + critique×0.40 − conflicts×0.10",
+    input_count: state.evidence_report.items.length + conflictFindings.length,
+    score: Math.max(0, aggregationScore),
+    findings: [
+      `evidence score ${evidenceScore}`,
+      `critique score ${critiqueScore}`,
+      `decision aggregation ${Math.max(0, aggregationScore).toFixed(3)}`,
+    ],
+    calculations: {
+      evidence_weight: 0.6,
+      critique_weight: 0.4,
+      conflict_penalty_per_finding: 0.1,
+      aggregation_score: Math.max(0, aggregationScore),
+    },
+  });
 
   record(state, "DECISION", {
     decision: state.decision,
     confidence: state.confidence,
+    confidence_report: state.confidence_report,
+    aggregation_score: Math.max(0, aggregationScore),
     conflicts,
     context_richness: context.richness,
   });
@@ -778,7 +1277,22 @@ router.post("/", async (req, res) => {
     notes: [],
     confidence: "ปานกลาง",
     conflicts: [],
+    conflict_findings: [],
     missing_info: [],
+    evidence_report: {
+      methodology: "",
+      items: [],
+      aggregate_score: 0,
+      coverage_score: 0,
+    },
+    confidence_report: {
+      score: 0,
+      band: "ปานกลาง",
+      method: "",
+      components: {},
+      verification_score: 0,
+    },
+    module_audit: [],
     runtime_lifecycle: [],
     governance: {
       status: "ผ่าน",
@@ -792,6 +1306,8 @@ router.post("/", async (req, res) => {
       expected: [],
       observed: [],
       checks: [],
+      detailed_checks: [],
+      score: 0,
     },
     knowledge_map: {
       facts: [],
@@ -815,7 +1331,12 @@ router.post("/", async (req, res) => {
     const understandStart = monotonicMs();
     const contextStart = monotonicMs();
     const context = validateContext(question, history);          // 3
-    const conflicts = detectConflicts(question, history);        // 6
+    const conflictFindings = analyzeConflictFindings(question, history);
+    const conflicts = [...new Set(conflictFindings.map((finding) => (
+      `พบ ${finding.type === "reversal" ? "แนวโน้มกลับจุดยืน" : "ความไม่สอดคล้อง"} (${finding.severity}) — ${finding.evidence}`
+    )))];
+    state.conflict_findings = conflictFindings;
+    state.conflicts = conflicts;
     const contextDuration = monotonicMs() - contextStart;
 
     // Cognitive pipeline — each stage is timed independently (ms-level)
@@ -849,8 +1370,8 @@ router.post("/", async (req, res) => {
     const reasonStart = monotonicMs();
     timed(state, () => stageHypotheses(state));
     timed(state, () => stageEvidenceEvaluation(state, history));
-    timed(state, () => stageCritique(state, context));
-    timed(state, () => stageDecision(state, history, memories, context, conflicts));
+    timed(state, () => stageCritique(state, context, conflictFindings));
+    timed(state, () => stageDecision(state, history, memories, context, conflicts, conflictFindings));
     recordRuntime(
       state,
       "REASON",
@@ -913,6 +1434,27 @@ router.post("/", async (req, res) => {
     timed(state, () => stageReflection(state));
     timed(state, () => stageLearning(state));
     state.verification = buildVerificationReport(state, responseText);
+    state.confidence_report = buildConfidenceReport(state, state.verification.score);
+    state.confidence = state.confidence_report.band;
+    state.module_audit.push({
+      module: "Verification",
+      algorithm: "six rule-based response checks with explicit evidence and equal weighting",
+      input_count: state.verification.detailed_checks.length,
+      score: state.verification.score,
+      findings: state.verification.detailed_checks.map((check) =>
+        `${check.criterion}: ${check.passed ? "ผ่าน" : "ไม่ผ่าน"} (${check.score})`
+      ),
+      calculations: {
+        passed_checks: state.verification.detailed_checks.filter((check) => check.passed).length,
+        total_checks: state.verification.detailed_checks.length,
+        verification_score: state.verification.score,
+      },
+    });
+    record(state, "VERIFICATION_RESULT", {
+      score: state.verification.score,
+      detailed_checks: state.verification.detailed_checks,
+      confidence_after_verification: state.confidence_report,
+    });
     recordRuntime(state, "VERIFY", "ตรวจสอบการแยกข้อมูล ความสอดคล้อง และ Human Agency", 0, undefined, undefined, false);
     recordRuntime(
       state,
@@ -936,7 +1478,11 @@ router.post("/", async (req, res) => {
         decision: state.decision,
         confidence: state.confidence,
         conflicts: state.conflicts,
+        conflict_findings: state.conflict_findings,
         missing_info: state.missing_info,
+        evidence_report: state.evidence_report,
+        confidence_report: state.confidence_report,
+        module_audit: state.module_audit,
         critique: state.critique,
         reflection: state.reflection,
         learning: state.learning,

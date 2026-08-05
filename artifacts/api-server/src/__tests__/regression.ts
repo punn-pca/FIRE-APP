@@ -11,6 +11,9 @@ import {
   detectConflicts,
   calculateConfidence,
   buildWorkingMemory,
+  analyzeConflictFindings,
+  buildEvidenceReport,
+  type PCAState,
   type ConversationTurn,
   type ContextValidation,
 } from "../routes/analyze";
@@ -95,6 +98,9 @@ describe("detectConflicts — clear reversal", () => {
   ];
   const result = detectConflicts("ทำไมถึงไม่แนะนำหุ้นเทคโนโลยี", history);
   assert("Reversal pattern detected", result.length > 0);
+  const findings = analyzeConflictFindings("ทำไมถึงไม่แนะนำหุ้นเทคโนโลยี", history);
+  assert("Structured conflict finding has evidence", findings[0]?.evidence.length > 0);
+  assert("Structured conflict finding has severity", findings[0]?.severity === "ปานกลาง");
 });
 
 describe("detectConflicts — consistent follow-up", () => {
@@ -148,6 +154,28 @@ describe("calculateConfidence — conflict penalises score", () => {
     idxA >= idxB,
     `no conflict: ${confNoConflict}, with conflict: ${confWithConflict}`
   );
+});
+
+// ─── Computed module outputs ───────────────────────────────────────────────────
+
+describe("buildEvidenceReport — weighted evidence scoring", () => {
+  const history: ConversationTurn[] = [
+    { role: "user", content: "งบประมาณโครงการมีจำกัดและต้องการลดความเสี่ยง" },
+    { role: "assistant", content: "ควรตรวจสอบต้นทุนและความเสี่ยงก่อนเริ่มโครงการ" },
+  ];
+  const memories: PCAState["memories"] = [
+    { content: "โครงการที่มีงบประมาณจำกัดควรแบ่งการลงทุนเป็นระยะ", layer: "long-term", source: "test", confidence: 0.9 },
+    { content: "หัวข้อที่ไม่เกี่ยวข้องกับการทำอาหาร", layer: "long-term", source: "test", confidence: 0.9 },
+  ];
+  const report = buildEvidenceReport("ช่วยประเมินความเสี่ยงของโครงการที่มีงบประมาณจำกัด", history, memories);
+  assert("Evidence report has methodology", report.methodology.includes("composite"));
+  assert("Direct input evidence is included", report.items.some((item) => item.source === "user_input"));
+  assert("Relevant memory is included", report.items.some((item) => item.source === "memory"));
+  assert("Irrelevant memory is excluded", !report.items.some((item) => item.text.includes("ทำอาหาร")));
+  assert("Aggregate score is bounded", report.aggregate_score >= 0 && report.aggregate_score <= 1);
+  assert("Evidence items contain component scores", report.items.every((item) =>
+    item.relevance_score >= 0 && item.quality_score >= 0 && item.composite_score >= 0
+  ));
 });
 
 // ─── 2. buildWorkingMemory ────────────────────────────────────────────────────

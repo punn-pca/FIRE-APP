@@ -46,6 +46,61 @@ export interface VerificationReport {
   expected: string[];
   observed: string[];
   checks: string[];
+  detailed_checks?: VerificationCheck[];
+  score?: number;
+}
+
+export interface EvidenceItem {
+  id: string;
+  source: 'user_input' | 'conversation_history' | 'memory';
+  text: string;
+  relevance_score: number;
+  quality_score: number;
+  consistency_score: number;
+  composite_score: number;
+  basis: string[];
+}
+
+export interface EvidenceReport {
+  methodology: string;
+  items: EvidenceItem[];
+  aggregate_score: number;
+  coverage_score: number;
+}
+
+export interface ConflictFinding {
+  id: string;
+  type: 'reversal' | 'inconsistency';
+  severity: 'ต่ำ' | 'ปานกลาง' | 'สูง';
+  current_signal: string;
+  prior_signal: string;
+  evidence: string;
+  score: number;
+}
+
+export interface VerificationCheck {
+  criterion: string;
+  rule: string;
+  passed: boolean;
+  evidence: string;
+  score: number;
+}
+
+export interface ConfidenceReport {
+  score: number;
+  band: PCAState['confidence'];
+  method: string;
+  components: Record<string, number>;
+  verification_score: number;
+}
+
+export interface ModuleAudit {
+  module: string;
+  algorithm: string;
+  input_count: number;
+  score?: number;
+  findings: string[];
+  calculations: Record<string, number | string | boolean>;
 }
 
 export interface KnowledgeMap {
@@ -63,7 +118,11 @@ export interface PCAState {
   decision: string;
   confidence: "สูง" | "ปานกลาง" | "ต่ำ" | "ไม่สามารถประเมินได้";
   conflicts?: string[];
+  conflict_findings?: ConflictFinding[];
   missing_info?: string[];
+  evidence_report?: EvidenceReport;
+  confidence_report?: ConfidenceReport;
+  module_audit?: ModuleAudit[];
   runtime_lifecycle?: RuntimeEvent[];
   governance?: GovernanceReport;
   verification?: VerificationReport;
@@ -148,6 +207,29 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
     </tr>`).join('');
   const governanceItems = (pca.governance?.safety_checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const verificationItems = (pca.verification?.checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const verificationDetailItems = (pca.verification?.detailed_checks ?? []).map((check) =>
+    `<li><strong>${escHtml(check.criterion)}</strong> — ${check.passed ? 'ผ่าน' : 'ไม่ผ่าน'} (${check.score.toFixed(2)})<br><span class="detail">${escHtml(check.rule)}<br>${escHtml(check.evidence)}</span></li>`
+  ).join('');
+  const evidenceRows = (pca.evidence_report?.items ?? []).map((item) => `
+    <tr>
+      <td>${escHtml(item.source)}</td>
+      <td>${escHtml(item.text)}</td>
+      <td>${item.relevance_score.toFixed(3)}</td>
+      <td>${item.quality_score.toFixed(3)}</td>
+      <td>${item.consistency_score.toFixed(3)}</td>
+      <td><strong>${item.composite_score.toFixed(3)}</strong></td>
+    </tr>`).join('');
+  const conflictFindingItems = (pca.conflict_findings ?? []).map((finding) =>
+    `<li><strong>${escHtml(finding.severity)} · ${escHtml(finding.type)}</strong> — ${escHtml(finding.evidence)}<br><span class="detail">ก่อนหน้า: ${escHtml(finding.prior_signal)}<br>ปัจจุบัน: ${escHtml(finding.current_signal)}</span></li>`
+  ).join('');
+  const auditRows = (pca.module_audit ?? []).map((audit) => `
+    <tr>
+      <td><strong>${escHtml(audit.module)}</strong></td>
+      <td>${escHtml(audit.algorithm)}</td>
+      <td>${audit.input_count}</td>
+      <td>${audit.score != null ? audit.score.toFixed(3) : '—'}</td>
+      <td>${audit.findings.map((finding) => escHtml(finding)).join('<br>')}</td>
+    </tr>`).join('');
   const factItems = (pca.knowledge_map?.facts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const assumptionItems = (pca.knowledge_map?.assumptions ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const unknownItems = (pca.knowledge_map?.unknowns ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
@@ -233,6 +315,12 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 .map-title{font-weight:800;font-size:9pt;margin-bottom:5px}
 .fact-title{color:#166534}.assumption-title{color:#92400e}.unknown-title{color:#475569}
 .status-line{font-size:9pt;margin-bottom:6px}
+.detail{font-size:8pt;color:#666}
+.audit-table,.evidence-table{width:100%;border-collapse:collapse;font-size:8.5pt}
+.audit-table th,.audit-table td,.evidence-table th,.evidence-table td{border:1px solid #e5e7eb;padding:5px;vertical-align:top}
+.audit-table th,.evidence-table th{background:#fff7ed;color:#92400e;text-align:left}
+.score-box{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.score-chip{border:1px solid #fed7aa;border-radius:5px;padding:4px 8px;background:#fff7ed;font-size:8.5pt}
 /* Footer */
 .rpt-footer{margin-top:22px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:8pt;color:#aaa;text-align:center}
 @media print{.grid3{display:grid}}
@@ -309,8 +397,38 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
       <div class="sec-title">✅ Verification</div>
       <div class="status-line">สถานะ: <span class="cbadge ${pca.verification?.status === 'ผ่าน' ? 'conf-high' : 'conf-mid'}">${escHtml(pca.verification?.status ?? 'ต้องตรวจสอบ')}</span></div>
       <ul class="ul-items">${verificationItems || '<li>—</li>'}</ul>
+      <div class="status-line">คะแนน verification: <strong>${((pca.verification?.score ?? 0) * 100).toFixed(1)}%</strong></div>
+      <ul class="ul-items">${verificationDetailItems || '<li>ไม่มีรายละเอียด</li>'}</ul>
     </div>
   </div>
+</div>
+
+<!-- COMPUTED MODULE AUDIT -->
+<div class="section">
+  <div class="sec-title">🧪 Module Audit — ผลคำนวณและวิธีการ</div>
+  <table class="audit-table">
+    <thead><tr><th>โมดูล</th><th>อัลกอริทึม</th><th>จำนวน input</th><th>คะแนน</th><th>ผลคำนวณ</th></tr></thead>
+    <tbody>${auditRows || '<tr><td colspan="5">ไม่มีข้อมูล module audit</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- EVIDENCE MATRIX -->
+<div class="section">
+  <div class="sec-title">⚖️ Evidence Matrix — หลักฐานที่ใช้จริง</div>
+  <div class="score-box">
+    <span class="score-chip">aggregate: ${(pca.evidence_report?.aggregate_score ?? 0).toFixed(3)}</span>
+    <span class="score-chip">coverage: ${(pca.evidence_report?.coverage_score ?? 0).toFixed(3)}</span>
+    <span class="score-chip">${escHtml(pca.evidence_report?.methodology ?? 'ไม่มี methodology')}</span>
+  </div>
+  <table class="evidence-table">
+    <thead><tr><th>แหล่ง</th><th>ข้อความ</th><th>relevance</th><th>quality</th><th>consistency</th><th>composite</th></tr></thead>
+    <tbody>${evidenceRows || '<tr><td colspan="6">ไม่มี evidence item</td></tr>'}</tbody>
+  </table>
+</div>
+
+<div class="section">
+  <div class="sec-title">⚠️ Conflict Findings</div>
+  <ul class="ul-items">${conflictFindingItems || '<li>ไม่พบ conflict finding</li>'}</ul>
 </div>
 
 <!-- KNOWLEDGE MAP -->
@@ -327,6 +445,11 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 <div class="section page-break">
   <div class="sec-title">💬 ผลการวิเคราะห์</div>
   <div class="answer-box">${escHtml(answer)}</div>
+    <div class="score-box">
+      <span class="score-chip">confidence: ${escHtml(pca.confidence)} (${(pca.confidence_report?.score ?? 0).toFixed(1)}/100)</span>
+      <span class="score-chip">verification: ${((pca.confidence_report?.verification_score ?? 0) * 100).toFixed(1)}%</span>
+    </div>
+    <div class="detail">สูตร confidence: ${escHtml(pca.confidence_report?.method ?? 'ไม่มีข้อมูลสูตร')}</div>
 </div>
 
 <!-- CRITIQUE + REFLECTION -->
@@ -659,6 +782,46 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <Text style={styles.pcaMetaLabel}>ขั้นตอน: </Text>
                 {message.pcaState.trace.length} stages
               </Text>
+              {message.pcaState.confidence_report && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    คะแนนความมั่นใจ: {message.pcaState.confidence_report.score.toFixed(1)}/100 · {message.pcaState.confidence}
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    Evidence: {(message.pcaState.confidence_report.components.evidence_quality ?? 0).toFixed(3)}
+                    {' · '}Verification: {(message.pcaState.confidence_report.verification_score * 100).toFixed(1)}%
+                  </Text>
+                  <Text style={styles.osCardText} numberOfLines={3}>
+                    สูตร: {message.pcaState.confidence_report.method}
+                  </Text>
+                </View>
+              )}
+              {message.pcaState.evidence_report && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    Evidence Matrix: {message.pcaState.evidence_report.items.length} รายการ
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    aggregate {message.pcaState.evidence_report.aggregate_score.toFixed(3)}
+                    {' · '}coverage {message.pcaState.evidence_report.coverage_score.toFixed(3)}
+                  </Text>
+                  {message.pcaState.evidence_report.items.slice(0, 3).map((item) => (
+                    <Text key={item.id} style={styles.osCardText} numberOfLines={2}>
+                      • {item.source}: {item.composite_score.toFixed(3)} — {item.text}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.module_audit && message.pcaState.module_audit.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>Module Audit: {message.pcaState.module_audit.length} โมดูล</Text>
+                  {message.pcaState.module_audit.map((audit) => (
+                    <Text key={audit.module} style={styles.osCardText} numberOfLines={2}>
+                      • {audit.module}: {audit.score != null ? audit.score.toFixed(3) : '—'} · {audit.algorithm}
+                    </Text>
+                  ))}
+                </View>
+              )}
               {/* Per-stage timing mini-list */}
               {message.pcaState.trace.map((entry, i) => {
                 const info = STAGE_INFO[entry.stage];
@@ -714,6 +877,24 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   <Text style={styles.osCardText}>
                     ความสอดคล้อง: {message.pcaState.verification.consistency}
                   </Text>
+                  <Text style={styles.osCardText}>
+                    คะแนน: {((message.pcaState.verification.score ?? 0) * 100).toFixed(1)}%
+                  </Text>
+                  {(message.pcaState.verification.detailed_checks ?? []).map((check) => (
+                    <Text key={check.criterion} style={styles.osCardText} numberOfLines={2}>
+                      {check.passed ? '✓' : '✗'} {check.criterion}: {check.evidence}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.conflict_findings && message.pcaState.conflict_findings.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>⚠ Conflict Findings: {message.pcaState.conflict_findings.length}</Text>
+                  {message.pcaState.conflict_findings.map((finding) => (
+                    <Text key={finding.id} style={styles.osCardText} numberOfLines={3}>
+                      • {finding.severity} · {finding.evidence}
+                    </Text>
+                  ))}
                 </View>
               )}
               {message.pcaState.knowledge_map && (
