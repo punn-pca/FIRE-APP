@@ -20,6 +20,8 @@ import type { PCAStateKnowledgeMap } from './pCAStateKnowledgeMap';
 import type { PCAStateLanguage } from './pCAStateLanguage';
 import type { PCAStateRuntimeLifecycleItem } from './pCAStateRuntimeLifecycleItem';
 import type { PCAStateTraceItem } from './pCAStateTraceItem';
+import type { ReasoningGraph } from './reasoningGraph';
+import type { StateTransition } from './stateTransition';
 import type { VerificationReport } from './verificationReport';
 
 export interface PCAState {
@@ -40,6 +42,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_graph: ReasoningGraph;
+  state_transitions: StateTransition[];
   verification: VerificationReport;
   runtime_lifecycle?: PCAStateRuntimeLifecycleItem[];
   governance?: PCAStateGovernance;

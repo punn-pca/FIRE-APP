@@ -17,6 +17,8 @@ import {
   buildVerificationReport,
   buildDecisionMatrix,
   buildLogicalVerification,
+  buildReasoningGraph,
+  buildStateTransitions,
   buildSystemPrompt,
   type PCAState,
   type ConversationTurn,
@@ -275,6 +277,14 @@ function makeVerificationState(): PCAState {
       selection_reason: "",
     },
     logical_verification: { status: "ต้องตรวจสอบ", checks: [], score: 0 },
+    reasoning_graph: {
+      claims: [],
+      edges: [],
+      selected_option: "",
+      unsupported_claim_count: 0,
+      methodology: "",
+    },
+    state_transitions: [],
     runtime_lifecycle: [],
     governance: {
       status: "ผ่าน",
@@ -404,6 +414,48 @@ describe("buildLogicalVerification — grounding and decision alignment", () => 
   assert("Logical verification is not keyword-only", result.checks.some(
     (check) => check.criterion === "fact_conclusion_consistency"
   ));
+});
+
+describe("buildReasoningGraph — claims connect evidence to decision", () => {
+  const state = makeVerificationState();
+  state.decision_matrix = {
+    methodology: "test",
+    criteria_weights: { evidence_alignment: 1 },
+    options: [{
+      id: "option-phased",
+      label: "ดำเนินการเป็นระยะ",
+      rationale: "ลดความเสี่ยง",
+      criteria: { evidence_alignment: 0.8 },
+      weighted_score: 0.8,
+      evidence_ids: ["evidence-input"],
+    }],
+    selected_option: "option-phased",
+    selected_score: 0.8,
+    selection_reason: "test",
+  };
+  state.logical_verification = { status: "ผ่าน", checks: [], score: 1 };
+  const graph = buildReasoningGraph(state);
+  assert("Graph contains fact and conclusion claims", graph.claims.some((claim) => claim.type === "fact") &&
+    graph.claims.some((claim) => claim.type === "conclusion"));
+  assert("Graph contains evidence support edge", graph.edges.some((edge) => edge.relation === "supports"));
+  assert("Conclusion points to selected option", graph.selected_option === "option-phased");
+  assert("Graph exposes unsupported claim count", graph.unsupported_claim_count >= 0);
+});
+
+describe("buildStateTransitions — causal mutations are explicit", () => {
+  const state = makeVerificationState();
+  state.missing_info = ["งบประมาณ"];
+  state.decision_matrix.selected_option = "option-phased";
+  state.verification.status = "ผ่าน";
+  state.confidence = "ต่ำ";
+  const transitions = buildStateTransitions(state);
+  assert("Transitions include missing information mutation", transitions.some(
+    (transition) => transition.state_field === "missing_info" && Array.isArray(transition.after)
+  ));
+  assert("Transitions include decision selection", transitions.some(
+    (transition) => transition.state_field === "decision_matrix.selected_option"
+  ));
+  assert("Transitions explain impact", transitions.every((transition) => transition.impact.length > 0));
 });
 
 // ─── 2. buildWorkingMemory ────────────────────────────────────────────────────

@@ -234,6 +234,50 @@ components:
         checks: { type: array, items: { $ref: "#/components/schemas/VerificationCheck" } }
         score: { type: number }
       required: [status, checks, score]
+    ClaimNode:
+      type: object
+      properties:
+        id: { type: string }
+        text: { type: string }
+        type: { type: string, enum: [fact, assumption, conclusion, unknown] }
+        status: { type: string, enum: [supported, partial, unsupported] }
+        source_module: { type: string }
+        evidence_ids: { type: array, items: { type: string } }
+        assumption_ids: { type: array, items: { type: string } }
+        conflict_ids: { type: array, items: { type: string } }
+        decision_option_id: { type: string }
+        support_score: { type: number }
+      required: [id, text, type, status, source_module, evidence_ids, assumption_ids, conflict_ids, support_score]
+    ReasoningGraphEdge:
+      type: object
+      properties:
+        id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        relation: { type: string, enum: [supports, assumes, contradicts, influences] }
+        weight: { type: number }
+        rationale: { type: string }
+      required: [id, from, to, relation, weight, rationale]
+    ReasoningGraph:
+      type: object
+      properties:
+        claims: { type: array, items: { $ref: "#/components/schemas/ClaimNode" } }
+        edges: { type: array, items: { $ref: "#/components/schemas/ReasoningGraphEdge" } }
+        selected_option: { type: string }
+        unsupported_claim_count: { type: number }
+        methodology: { type: string }
+      required: [claims, edges, selected_option, unsupported_claim_count, methodology]
+    StateTransition:
+      type: object
+      properties:
+        id: { type: string }
+        module: { type: string }
+        state_field: { type: string }
+        before: {}
+        after: {}
+        trigger: { type: string }
+        impact: { type: string }
+      required: [id, module, state_field, before, after, trigger, impact]
     PCAState:
       type: object
       properties:
@@ -260,12 +304,14 @@ components:
         memory_retrieval: { $ref: "#/components/schemas/MemoryRetrievalReport" }
         decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
         logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
+        reasoning_graph: { $ref: "#/components/schemas/ReasoningGraph" }
+        state_transitions: { type: array, items: { $ref: "#/components/schemas/StateTransition" } }
         verification: { $ref: "#/components/schemas/VerificationReport" }
         runtime_lifecycle: { type: array, items: { type: object, additionalProperties: true } }
         governance: { type: object, additionalProperties: true }
         knowledge_map: { type: object, additionalProperties: true }
         trace: { type: array, items: { type: object, additionalProperties: true } }
-      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, verification]
+      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_graph, state_transitions, verification]
     AnalyzeResponse:
       type: object
       properties:

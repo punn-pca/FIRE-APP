@@ -169,6 +169,49 @@ export interface LogicalVerification {
   score: number;
 }
 
+export type ClaimType = "fact" | "assumption" | "conclusion" | "unknown";
+export type ClaimStatus = "supported" | "partial" | "unsupported";
+
+export interface ClaimNode {
+  id: string;
+  text: string;
+  type: ClaimType;
+  status: ClaimStatus;
+  source_module: string;
+  evidence_ids: string[];
+  assumption_ids: string[];
+  conflict_ids: string[];
+  decision_option_id?: string;
+  support_score: number;
+}
+
+export interface ReasoningGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  relation: "supports" | "assumes" | "contradicts" | "influences";
+  weight: number;
+  rationale: string;
+}
+
+export interface ReasoningGraph {
+  claims: ClaimNode[];
+  edges: ReasoningGraphEdge[];
+  selected_option: string;
+  unsupported_claim_count: number;
+  methodology: string;
+}
+
+export interface StateTransition {
+  id: string;
+  module: string;
+  state_field: string;
+  before: unknown;
+  after: unknown;
+  trigger: string;
+  impact: string;
+}
+
 interface VerificationReport {
   status: "ผ่าน" | "ต้องตรวจสอบ";
   consistency: "สอดคล้อง" | "ต้องทบทวน";
@@ -226,6 +269,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_graph: ReasoningGraph;
+  state_transitions: StateTransition[];
   runtime_lifecycle: RuntimeEvent[];
   governance: GovernanceReport;
   verification: VerificationReport;
@@ -1231,6 +1276,225 @@ export function buildLogicalVerification(state: PCAState, responseText: string):
   };
 }
 
+export function buildReasoningGraph(state: PCAState): ReasoningGraph {
+  const claims: ClaimNode[] = [];
+  const edges: ReasoningGraphEdge[] = [];
+  const evidenceClaims = state.evidence_report.items.map((item) => {
+    const id = `claim-${item.id}`;
+    claims.push({
+      id,
+      text: item.text,
+      type: "fact",
+      status: item.composite_score >= 0.6 ? "supported" : "partial",
+      source_module: "Evidence Evaluation",
+      evidence_ids: [item.id],
+      assumption_ids: [],
+      conflict_ids: [],
+      support_score: Number(item.composite_score.toFixed(3)),
+    });
+    return { id, evidenceId: item.id };
+  });
+
+  const assumptionClaims = state.hypotheses.map((hypothesis, index) => {
+    const id = `claim-assumption-${index + 1}`;
+    claims.push({
+      id,
+      text: hypothesis.claim,
+      type: "assumption",
+      status: hypothesis.confidence >= 0.7 ? "partial" : "unsupported",
+      source_module: "Hypothesis",
+      evidence_ids: [],
+      assumption_ids: [id],
+      conflict_ids: [],
+      support_score: Number(hypothesis.confidence.toFixed(3)),
+    });
+    return id;
+  });
+
+  const unknownClaims = state.missing_info.map((missing, index) => {
+    const id = `claim-unknown-${index + 1}`;
+    claims.push({
+      id,
+      text: missing,
+      type: "unknown",
+      status: "unsupported",
+      source_module: "Critique",
+      evidence_ids: [],
+      assumption_ids: [],
+      conflict_ids: [],
+      support_score: 0,
+    });
+    return id;
+  });
+
+  const selected = state.decision_matrix.options.find(
+    (option) => option.id === state.decision_matrix.selected_option
+  );
+  const conclusionId = "claim-conclusion-selected-option";
+  const conclusionEvidenceIds = selected?.evidence_ids ?? [];
+  const conclusionSupport = clamp01(
+    (state.evidence_report.aggregate_score * 0.5) +
+    (state.decision_matrix.selected_score * 0.3) +
+    (state.logical_verification.score * 0.2)
+  );
+  const conclusionStatus: ClaimStatus = conclusionSupport >= 0.75
+    ? "supported"
+    : conclusionSupport >= 0.45 ? "partial" : "unsupported";
+  claims.push({
+    id: conclusionId,
+    text: selected?.label ?? state.decision ?? "ยังไม่มีข้อสรุป",
+    type: "conclusion",
+    status: conclusionStatus,
+    source_module: "Decision",
+    evidence_ids: conclusionEvidenceIds,
+    assumption_ids: assumptionClaims,
+    conflict_ids: state.conflict_findings.map((finding) => finding.id),
+    decision_option_id: selected?.id,
+    support_score: Number(conclusionSupport.toFixed(3)),
+  });
+
+  for (const evidence of evidenceClaims) {
+    edges.push({
+      id: `edge-${evidence.id}-supports-conclusion`,
+      from: evidence.id,
+      to: conclusionId,
+      relation: "supports",
+      weight: Number((state.evidence_report.items.find((item) => item.id === evidence.evidenceId)?.composite_score ?? 0).toFixed(3)),
+      rationale: "หลักฐานนี้ถูกใช้ประเมินและสนับสนุนทางเลือกที่เลือก",
+    });
+  }
+  for (const assumptionId of assumptionClaims) {
+    edges.push({
+      id: `edge-${assumptionId}-assumes-conclusion`,
+      from: assumptionId,
+      to: conclusionId,
+      relation: "assumes",
+      weight: 0.5,
+      rationale: "ข้อสรุปขึ้นกับสมมติฐานนี้",
+    });
+  }
+  state.conflict_findings.forEach((finding) => {
+    const conflictId = `claim-conflict-${finding.id}`;
+    claims.push({
+      id: conflictId,
+      text: finding.evidence,
+      type: "unknown",
+      status: "partial",
+      source_module: "Critique",
+      evidence_ids: [],
+      assumption_ids: [],
+      conflict_ids: [finding.id],
+      support_score: Number(finding.score.toFixed(3)),
+    });
+    edges.push({
+      id: `edge-${conflictId}-contradicts-conclusion`,
+      from: conflictId,
+      to: conclusionId,
+      relation: "contradicts",
+      weight: Number(finding.score.toFixed(3)),
+      rationale: "conflict นี้ลดความมั่นใจในข้อสรุป",
+    });
+  });
+  unknownClaims.forEach((unknownId) => {
+    edges.push({
+      id: `edge-${unknownId}-influences-conclusion`,
+      from: unknownId,
+      to: conclusionId,
+      relation: "influences",
+      weight: 0.2,
+      rationale: "ข้อมูลที่ขาดทำให้ข้อสรุปต้องมีขอบเขต",
+    });
+  });
+
+  return {
+    claims,
+    edges,
+    selected_option: state.decision_matrix.selected_option,
+    unsupported_claim_count: claims.filter((claim) => claim.status === "unsupported").length,
+    methodology: "claim-level graph: evidence supports, assumptions condition, conflicts contradict, unknowns constrain conclusions",
+  };
+}
+
+export function buildStateTransitions(state: PCAState): StateTransition[] {
+  const transition = (
+    id: string,
+    module: string,
+    state_field: string,
+    before: unknown,
+    after: unknown,
+    trigger: string,
+    impact: string
+  ): StateTransition => ({ id, module, state_field, before, after, trigger, impact });
+  return [
+    transition(
+      "transition-observation-input",
+      "Observation",
+      "observations",
+      0,
+      state.observations.length,
+      "รับ user_input และ tokenize",
+      "สร้างข้อมูลตั้งต้นสำหรับ Understanding"
+    ),
+    transition(
+      "transition-context-missing-info",
+      "Critique",
+      "missing_info",
+      0,
+      state.missing_info,
+      "ตรวจสอบความครบถ้วนของ context",
+      state.missing_info.length > 0 ? "ลด confidence และบังคับให้ระบุข้อมูลที่ขาด" : "ไม่เพิ่มข้อจำกัดด้านข้อมูล"
+    ),
+    transition(
+      "transition-memory-retrieval",
+      "Memory Retrieval",
+      "memory_retrieval",
+      { candidate_count: 0, matched_count: 0 },
+      {
+        candidate_count: state.memory_retrieval.candidate_count,
+        matched_count: state.memory_retrieval.matched_count,
+      },
+      "ค้น persistent memory ด้วย query tokens และ threshold",
+      "เปลี่ยน memory hits ให้เป็น context/evidence ที่ตรวจสอบได้"
+    ),
+    transition(
+      "transition-evidence-score",
+      "Evidence Evaluation",
+      "evidence_report.aggregate_score",
+      0,
+      state.evidence_report.aggregate_score,
+      "รวม relevance, quality และ consistency ของ evidence",
+      "กำหนดน้ำหนักหลักฐานที่ใช้ใน Decision Matrix"
+    ),
+    transition(
+      "transition-decision-selection",
+      "Decision",
+      "decision_matrix.selected_option",
+      "",
+      state.decision_matrix.selected_option,
+      "คำนวณ weighted multi-criteria score",
+      `เลือกทางเลือกด้วย score ${state.decision_matrix.selected_score.toFixed(3)}`
+    ),
+    transition(
+      "transition-verification",
+      "Verification",
+      "verification.status",
+      "ต้องตรวจสอบ",
+      state.verification.status,
+      "ตรวจ evidence grounding, decision alignment และ consistency",
+      `verification score ${state.verification.score.toFixed(3)} ส่งผลต่อ confidence`
+    ),
+    transition(
+      "transition-confidence",
+      "Verification",
+      "confidence",
+      "ปานกลาง",
+      state.confidence,
+      "รวม context, evidence, conflict, memory และ verification",
+      "กำหนดระดับความมั่นใจสุดท้ายที่แสดงต่อผู้ใช้"
+    ),
+  ];
+}
+
 function buildDataflow(state: PCAState): DataflowEdge[] {
   const edge = (
     id: string,
@@ -1719,6 +1983,14 @@ router.post("/", async (req, res) => {
       checks: [],
       score: 0,
     },
+    reasoning_graph: {
+      claims: [],
+      edges: [],
+      selected_option: "",
+      unsupported_claim_count: 0,
+      methodology: "",
+    },
+    state_transitions: [],
     runtime_lifecycle: [],
     governance: {
       status: "ผ่าน",
@@ -1958,6 +2230,8 @@ router.post("/", async (req, res) => {
     state.execution_time_ms = Number((monotonicMs() - startMono).toFixed(3));
     finalizeRuntimeMetrics(state);
     state.dataflow = buildDataflow(state);
+    state.reasoning_graph = buildReasoningGraph(state);
+    state.state_transitions = buildStateTransitions(state);
 
     res.json({
       response: state.response,
@@ -1980,6 +2254,8 @@ router.post("/", async (req, res) => {
         memory_retrieval: state.memory_retrieval,
         decision_matrix: state.decision_matrix,
         logical_verification: state.logical_verification,
+         reasoning_graph: state.reasoning_graph,
+         state_transitions: state.state_transitions,
         critique: state.critique,
         reflection: state.reflection,
         learning: state.learning,

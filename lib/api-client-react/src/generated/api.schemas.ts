@@ -218,6 +218,75 @@ export interface LogicalVerification {
   score: number;
 }
 
+export type ClaimNodeType = typeof ClaimNodeType[keyof typeof ClaimNodeType];
+
+
+export const ClaimNodeType = {
+  fact: 'fact',
+  assumption: 'assumption',
+  conclusion: 'conclusion',
+  unknown: 'unknown',
+} as const;
+
+export type ClaimNodeStatus = typeof ClaimNodeStatus[keyof typeof ClaimNodeStatus];
+
+
+export const ClaimNodeStatus = {
+  supported: 'supported',
+  partial: 'partial',
+  unsupported: 'unsupported',
+} as const;
+
+export interface ClaimNode {
+  id: string;
+  text: string;
+  type: ClaimNodeType;
+  status: ClaimNodeStatus;
+  source_module: string;
+  evidence_ids: string[];
+  assumption_ids: string[];
+  conflict_ids: string[];
+  decision_option_id?: string;
+  support_score: number;
+}
+
+export type ReasoningGraphEdgeRelation = typeof ReasoningGraphEdgeRelation[keyof typeof ReasoningGraphEdgeRelation];
+
+
+export const ReasoningGraphEdgeRelation = {
+  supports: 'supports',
+  assumes: 'assumes',
+  contradicts: 'contradicts',
+  influences: 'influences',
+} as const;
+
+export interface ReasoningGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  relation: ReasoningGraphEdgeRelation;
+  weight: number;
+  rationale: string;
+}
+
+export interface ReasoningGraph {
+  claims: ClaimNode[];
+  edges: ReasoningGraphEdge[];
+  selected_option: string;
+  unsupported_claim_count: number;
+  methodology: string;
+}
+
+export interface StateTransition {
+  id: string;
+  module: string;
+  state_field: string;
+  before: unknown;
+  after: unknown;
+  trigger: string;
+  impact: string;
+}
+
 export type PCAStateLanguage = typeof PCAStateLanguage[keyof typeof PCAStateLanguage];
 
 
@@ -264,6 +333,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_graph: ReasoningGraph;
+  state_transitions: StateTransition[];
   verification: VerificationReport;
   runtime_lifecycle?: PCAStateRuntimeLifecycleItem[];
   governance?: PCAStateGovernance;

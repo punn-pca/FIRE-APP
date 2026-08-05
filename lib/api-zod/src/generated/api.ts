@@ -162,6 +162,40 @@ export const AnalyzeQuestionResponse = zod.object({
 })),
   "score": zod.number()
 }),
+  "reasoning_graph": zod.object({
+  "claims": zod.array(zod.object({
+  "id": zod.string(),
+  "text": zod.string(),
+  "type": zod.enum(['fact', 'assumption', 'conclusion', 'unknown']),
+  "status": zod.enum(['supported', 'partial', 'unsupported']),
+  "source_module": zod.string(),
+  "evidence_ids": zod.array(zod.string()),
+  "assumption_ids": zod.array(zod.string()),
+  "conflict_ids": zod.array(zod.string()),
+  "decision_option_id": zod.string().optional(),
+  "support_score": zod.number()
+})),
+  "edges": zod.array(zod.object({
+  "id": zod.string(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "relation": zod.enum(['supports', 'assumes', 'contradicts', 'influences']),
+  "weight": zod.number(),
+  "rationale": zod.string()
+})),
+  "selected_option": zod.string(),
+  "unsupported_claim_count": zod.number(),
+  "methodology": zod.string()
+}),
+  "state_transitions": zod.array(zod.object({
+  "id": zod.string(),
+  "module": zod.string(),
+  "state_field": zod.string(),
+  "before": zod.unknown(),
+  "after": zod.unknown(),
+  "trigger": zod.string(),
+  "impact": zod.string()
+})),
   "verification": zod.object({
   "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
   "consistency": zod.enum(['สอดคล้อง', 'ต้องทบทวน']),

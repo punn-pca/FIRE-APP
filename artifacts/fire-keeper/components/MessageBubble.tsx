@@ -169,6 +169,46 @@ export interface LogicalVerification {
   score: number;
 }
 
+export interface ClaimNode {
+  id: string;
+  text: string;
+  type: 'fact' | 'assumption' | 'conclusion' | 'unknown';
+  status: 'supported' | 'partial' | 'unsupported';
+  source_module: string;
+  evidence_ids: string[];
+  assumption_ids: string[];
+  conflict_ids: string[];
+  decision_option_id?: string;
+  support_score: number;
+}
+
+export interface ReasoningGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  relation: 'supports' | 'assumes' | 'contradicts' | 'influences';
+  weight: number;
+  rationale: string;
+}
+
+export interface ReasoningGraph {
+  claims: ClaimNode[];
+  edges: ReasoningGraphEdge[];
+  selected_option: string;
+  unsupported_claim_count: number;
+  methodology: string;
+}
+
+export interface StateTransition {
+  id: string;
+  module: string;
+  state_field: string;
+  before: unknown;
+  after: unknown;
+  trigger: string;
+  impact: string;
+}
+
 export interface KnowledgeMap {
   facts: string[];
   assumptions: string[];
@@ -194,6 +234,8 @@ export interface PCAState {
   memory_retrieval?: MemoryRetrievalReport;
   decision_matrix?: DecisionMatrix;
   logical_verification?: LogicalVerification;
+  reasoning_graph?: ReasoningGraph;
+  state_transitions?: StateTransition[];
   runtime_lifecycle?: RuntimeEvent[];
   governance?: GovernanceReport;
   verification?: VerificationReport;
@@ -342,6 +384,31 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
   const logicalVerificationItems = (pca.logical_verification?.checks ?? []).map((check) =>
     `<li><strong>${escHtml(check.criterion)}</strong> — ${check.passed ? 'ผ่าน' : 'ไม่ผ่าน'} (${check.score.toFixed(2)})<br><span class="detail">${escHtml(check.rule)}<br>${escHtml(check.evidence)}</span></li>`
   ).join('');
+  const graphClaimRows = (pca.reasoning_graph?.claims ?? []).map((claim) => `
+    <tr>
+      <td><strong>${escHtml(claim.id)}</strong></td>
+      <td>${escHtml(claim.type)}</td>
+      <td>${escHtml(claim.status)}</td>
+      <td>${escHtml(claim.text)}</td>
+      <td>${escHtml(claim.source_module)}</td>
+      <td>${claim.support_score.toFixed(3)}</td>
+    </tr>`).join('');
+  const graphEdgeRows = (pca.reasoning_graph?.edges ?? []).map((edge) => `
+    <tr>
+      <td>${escHtml(edge.from)}</td>
+      <td>${escHtml(edge.relation)}</td>
+      <td>${escHtml(edge.to)}</td>
+      <td>${edge.weight.toFixed(3)}</td>
+      <td>${escHtml(edge.rationale)}</td>
+    </tr>`).join('');
+  const transitionRows = (pca.state_transitions ?? []).map((transition) => `
+    <tr>
+      <td><strong>${escHtml(transition.module)}</strong><br><span class="detail">${escHtml(transition.state_field)}</span></td>
+      <td>${escHtml(JSON.stringify(transition.before) ?? '—')}</td>
+      <td>${escHtml(JSON.stringify(transition.after) ?? '—')}</td>
+      <td>${escHtml(transition.trigger)}</td>
+      <td>${escHtml(transition.impact)}</td>
+    </tr>`).join('');
   const factItems = (pca.knowledge_map?.facts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const assumptionItems = (pca.knowledge_map?.assumptions ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const unknownItems = (pca.knowledge_map?.unknowns ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
@@ -591,6 +658,33 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
   <div class="sec-title">🧠 Logical Verification</div>
   <div class="status-line">สถานะ: <span class="cbadge ${pca.logical_verification?.status === 'ผ่าน' ? 'conf-high' : 'conf-mid'}">${escHtml(pca.logical_verification?.status ?? 'ต้องตรวจสอบ')}</span> · score ${((pca.logical_verification?.score ?? 0) * 100).toFixed(1)}%</div>
   <ul class="ul-items">${logicalVerificationItems || '<li>ไม่มี logical checks</li>'}</ul>
+</div>
+
+<!-- REASONING GRAPH -->
+<div class="section page-break">
+  <div class="sec-title">🕸 Claim–Evidence–Decision Graph</div>
+  <div class="score-box">
+    <span class="score-chip">selected: ${escHtml(pca.reasoning_graph?.selected_option ?? '—')}</span>
+    <span class="score-chip">unsupported: ${pca.reasoning_graph?.unsupported_claim_count ?? 0}</span>
+  </div>
+  <div class="detail">${escHtml(pca.reasoning_graph?.methodology ?? 'ไม่มี reasoning graph')}</div>
+  <table class="evidence-table">
+    <thead><tr><th>claim ID</th><th>type</th><th>status</th><th>claim</th><th>module</th><th>support</th></tr></thead>
+    <tbody>${graphClaimRows || '<tr><td colspan="6">ไม่มี claim</td></tr>'}</tbody>
+  </table>
+  <table class="audit-table">
+    <thead><tr><th>จาก</th><th>relation</th><th>ถึง</th><th>weight</th><th>เหตุผล</th></tr></thead>
+    <tbody>${graphEdgeRows || '<tr><td colspan="5">ไม่มี graph edge</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- STATE TRANSITIONS -->
+<div class="section">
+  <div class="sec-title">🔁 State Transition Trace — field mutation & impact</div>
+  <table class="audit-table">
+    <thead><tr><th>module / field</th><th>ก่อน</th><th>หลัง</th><th>trigger</th><th>impact</th></tr></thead>
+    <tbody>${transitionRows || '<tr><td colspan="5">ไม่มี state transition</td></tr>'}</tbody>
+  </table>
 </div>
 
 <div class="section">
@@ -1121,6 +1215,34 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   {message.pcaState.logical_verification.checks.map((check) => (
                     <Text key={check.criterion} style={styles.osCardText} numberOfLines={2}>
                       {check.passed ? '✓' : '✗'} {check.criterion}: {check.evidence}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.reasoning_graph && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    🕸 Claim Graph · {message.pcaState.reasoning_graph.claims.length} claims · {message.pcaState.reasoning_graph.edges.length} links
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    selected: {message.pcaState.reasoning_graph.selected_option || '—'} · unsupported: {message.pcaState.reasoning_graph.unsupported_claim_count}
+                  </Text>
+                  {message.pcaState.reasoning_graph.claims.slice(0, 5).map((claim) => (
+                    <Text key={claim.id} style={styles.osCardText} numberOfLines={2}>
+                      {claim.status === 'supported' ? '✓' : claim.status === 'partial' ? '△' : '✗'} {claim.type} · {claim.support_score.toFixed(3)} · {claim.text}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.state_transitions && message.pcaState.state_transitions.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    🔁 State Transitions · {message.pcaState.state_transitions.length} mutations
+                  </Text>
+                  {message.pcaState.state_transitions.slice(0, 6).map((transition) => (
+                    <Text key={transition.id} style={styles.osCardText} numberOfLines={3}>
+                      • {transition.module} · {transition.state_field}{'\n'}
+                      {JSON.stringify(transition.before)} → {JSON.stringify(transition.after)}
                     </Text>
                   ))}
                 </View>

@@ -8,6 +8,9 @@
 
 export * from './analyzeRequest';
 export * from './analyzeResponse';
+export * from './claimNode';
+export * from './claimNodeStatus';
+export * from './claimNodeType';
 export * from './confidenceReport';
 export * from './confidenceReportBand';
 export * from './confidenceReportComponents';
@@ -38,6 +41,10 @@ export * from './pCAStateKnowledgeMap';
 export * from './pCAStateLanguage';
 export * from './pCAStateRuntimeLifecycleItem';
 export * from './pCAStateTraceItem';
+export * from './reasoningGraph';
+export * from './reasoningGraphEdge';
+export * from './reasoningGraphEdgeRelation';
+export * from './stateTransition';
 export * from './verificationCheck';
 export * from './verificationReport';
 export * from './verificationReportConsistency';

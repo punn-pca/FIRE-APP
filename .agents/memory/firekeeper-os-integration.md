@@ -32,3 +32,9 @@ The cognitive trace should represent causal dataflow, not only a chronological t
 **Why:** A timeline can show that modules ran without showing how state moved or why a selected direction won. Explicit lineage, alternatives, retrieval misses, and logical checks make the trace inspectable as an architecture.
 
 **How to apply:** Preserve the shared trace contract across API, mobile panel, and printable report. Keep phase timing separate from operation metrics, load persisted memory before retrieval, and make evidence/decision/verification outputs generation controls rather than post-hoc annotations.
+
+Claim-level reasoning and state mutations should be derived from the same finalized PCA state and exposed together in the API, mobile panel, and printable report.
+
+**Why:** A graph assembled separately from the pipeline can look explanatory while missing the actual evidence, selected option, conflicts, or confidence mutation that produced the response.
+
+**How to apply:** Build claims from evidence/hypotheses/unknowns/decision state, connect them with typed relations and support weights, and record state transitions with before/after values, trigger, and user-visible impact. Keep unsupported claims explicit rather than hiding them in an overall pass status.
