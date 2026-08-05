@@ -6,6 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './analystReport';
+export * from './analystReportConflictsItem';
+export * from './analystReportKnowledgeMap';
 export * from './analyzeRequest';
 export * from './analyzeResponse';
 export * from './claimNode';
@@ -22,6 +25,9 @@ export * from './decisionMatrix';
 export * from './decisionMatrixCriteriaWeights';
 export * from './decisionOption';
 export * from './decisionOptionCriteria';
+export * from './developerTrace';
+export * from './developerTraceRuntimeLifecycleItem';
+export * from './developerTraceTraceItem';
 export * from './evidenceItem';
 export * from './evidenceItemSource';
 export * from './evidenceReport';
@@ -51,8 +57,11 @@ export * from './reasoningGraph';
 export * from './reasoningGraphEdge';
 export * from './reasoningGraphEdgeRelation';
 export * from './reasoningQualityMetrics';
+export * from './reportLayers';
 export * from './runtimeSummary';
 export * from './stateTransition';
+export * from './userReport';
+export * from './userReportConfidence';
 export * from './verificationCheck';
 export * from './verificationReport';
 export * from './verificationReportConsistency';

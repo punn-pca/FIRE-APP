@@ -24,6 +24,7 @@ import {
   buildVerifiedFallback,
   normalizeUserFacingResponse,
   classifyIntent,
+  buildReportLayers,
   type PCAState,
   type ConversationTurn,
   type ContextValidation,
@@ -453,6 +454,24 @@ describe("buildVerificationReport — substantive checks", () => {
   assert("Grounded answer passes evidence alignment", grounded.detailed_checks.find(
     (check) => check.criterion === "evidence_alignment"
   )?.passed === true);
+});
+
+describe("buildReportLayers — separated output contract", () => {
+  const state = makeVerificationState();
+  state.response = "คำตอบปกติสำหรับผู้ใช้";
+  const reports = buildReportLayers(state);
+  assert("User Report contains the fixed answer", reports.user_report.answer === state.response);
+  assert("Analyst Report contains evidence", reports.analyst_report.evidence_report === state.evidence_report);
+  assert("Developer Trace contains runtime trace", reports.developer_trace.trace === state.trace);
+  assert("Decision Matrix is analyst-only", reports.analyst_report.decision_matrix !== undefined);
+  assert("User Report does not expose decision matrix", !("decision_matrix" in reports.user_report));
+
+  const explanatory = { ...state, intent: classifyIntent("รักคืออะไร") };
+  const explanatoryReports = buildReportLayers(explanatory);
+  assert(
+    "Explanatory User Report does not inherit decision matrix",
+    explanatoryReports.analyst_report.decision_matrix === undefined
+  );
 });
 
 describe("buildConfidenceReport — history and memory are separate", () => {

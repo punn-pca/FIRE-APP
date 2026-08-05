@@ -365,10 +365,53 @@ components:
         knowledge_map: { type: object, additionalProperties: true }
         trace: { type: array, items: { type: object, additionalProperties: true } }
       required: [user_input, language, intent, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_quality, runtime_summary, reasoning_graph, state_transitions, verification]
+    UserReport:
+      type: object
+      properties:
+        answer: { type: string }
+        route: { $ref: "#/components/schemas/IntentRoute" }
+        confidence: { type: string, enum: [สูง, ปานกลาง, ต่ำ, ไม่สามารถประเมินได้] }
+        limitations: { type: array, items: { type: string } }
+        next_step: { type: string }
+      required: [answer, route, confidence, limitations]
+    AnalystReport:
+      type: object
+      properties:
+        evidence_report: { $ref: "#/components/schemas/EvidenceReport" }
+        knowledge_map: { type: object, additionalProperties: true }
+        missing_info: { type: array, items: { type: string } }
+        conflicts: { type: array, items: { type: object, additionalProperties: true } }
+        confidence_report: { $ref: "#/components/schemas/ConfidenceReport" }
+        verification: { $ref: "#/components/schemas/VerificationReport" }
+        logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
+        reasoning_quality: { $ref: "#/components/schemas/ReasoningQualityMetrics" }
+        decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
+      required: [evidence_report, knowledge_map, missing_info, conflicts, confidence_report, verification, logical_verification, reasoning_quality]
+    DeveloperTrace:
+      type: object
+      properties:
+        notes: { type: array, items: { type: string } }
+        runtime_summary: { $ref: "#/components/schemas/RuntimeSummary" }
+        runtime_lifecycle: { type: array, items: { type: object, additionalProperties: true } }
+        trace: { type: array, items: { type: object, additionalProperties: true } }
+        dataflow: { type: array, items: { $ref: "#/components/schemas/DataflowEdge" } }
+        runtime_metrics: { type: array, items: { $ref: "#/components/schemas/ModuleRuntimeMetric" } }
+        module_audit: { type: array, items: { $ref: "#/components/schemas/ModuleAudit" } }
+        state_transitions: { type: array, items: { $ref: "#/components/schemas/StateTransition" } }
+        reasoning_graph: { $ref: "#/components/schemas/ReasoningGraph" }
+      required: [notes, runtime_summary, runtime_lifecycle, trace, dataflow, runtime_metrics, module_audit, state_transitions, reasoning_graph]
+    ReportLayers:
+      type: object
+      properties:
+        user_report: { $ref: "#/components/schemas/UserReport" }
+        analyst_report: { $ref: "#/components/schemas/AnalystReport" }
+        developer_trace: { $ref: "#/components/schemas/DeveloperTrace" }
+      required: [user_report, analyst_report, developer_trace]
     AnalyzeResponse:
       type: object
       properties:
         response: { type: string }
+        reports: { $ref: "#/components/schemas/ReportLayers" }
         pcaState: { $ref: "#/components/schemas/PCAState" }
-      required: [response, pcaState]
+      required: [response, reports, pcaState]
 

@@ -23,6 +23,7 @@ import MessageBubble, {
   formatThaiFileStamp,
   type Message,
   type PCAState,
+  type ReportLayers,
 } from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
 import PCAProgress from '@/components/PCAProgress';
@@ -128,6 +129,7 @@ export default function ChatScreen() {
         const data = await response.json() as {
           response: string;
           pcaState: PCAState;
+          reports?: ReportLayers;
         };
 
         const elapsedMs = Date.now() - startTime;
@@ -137,6 +139,7 @@ export default function ChatScreen() {
           content: data.response,
           elapsedMs,
           pcaState: data.pcaState,
+          reports: data.reports,
           timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);

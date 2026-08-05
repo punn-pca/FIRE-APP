@@ -421,7 +421,64 @@ export interface PCAState {
   trace?: PCAStateTraceItem[];
 }
 
+export type UserReportConfidence = typeof UserReportConfidence[keyof typeof UserReportConfidence];
+
+
+export const UserReportConfidence = {
+  สูง: 'สูง',
+  ปานกลาง: 'ปานกลาง',
+  ต่ำ: 'ต่ำ',
+  ไม่สามารถประเมินได้: 'ไม่สามารถประเมินได้',
+} as const;
+
+export interface UserReport {
+  answer: string;
+  route: IntentRoute;
+  confidence: UserReportConfidence;
+  limitations: string[];
+  next_step?: string;
+}
+
+export type AnalystReportKnowledgeMap = { [key: string]: unknown };
+
+export type AnalystReportConflictsItem = { [key: string]: unknown };
+
+export interface AnalystReport {
+  evidence_report: EvidenceReport;
+  knowledge_map: AnalystReportKnowledgeMap;
+  missing_info: string[];
+  conflicts: AnalystReportConflictsItem[];
+  confidence_report: ConfidenceReport;
+  verification: VerificationReport;
+  logical_verification: LogicalVerification;
+  reasoning_quality: ReasoningQualityMetrics;
+  decision_matrix?: DecisionMatrix;
+}
+
+export type DeveloperTraceRuntimeLifecycleItem = { [key: string]: unknown };
+
+export type DeveloperTraceTraceItem = { [key: string]: unknown };
+
+export interface DeveloperTrace {
+  notes: string[];
+  runtime_summary: RuntimeSummary;
+  runtime_lifecycle: DeveloperTraceRuntimeLifecycleItem[];
+  trace: DeveloperTraceTraceItem[];
+  dataflow: DataflowEdge[];
+  runtime_metrics: ModuleRuntimeMetric[];
+  module_audit: ModuleAudit[];
+  state_transitions: StateTransition[];
+  reasoning_graph: ReasoningGraph;
+}
+
+export interface ReportLayers {
+  user_report: UserReport;
+  analyst_report: AnalystReport;
+  developer_trace: DeveloperTrace;
+}
+
 export interface AnalyzeResponse {
   response: string;
+  reports: ReportLayers;
   pcaState: PCAState;
 }

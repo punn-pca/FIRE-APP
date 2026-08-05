@@ -20,3 +20,9 @@ User-facing answers must be normalized separately from PCA audit output: non-dec
 **Why:** A valid LLM analysis can still be a poor product response when it exposes the full internal report instead of answering the user's question.
 
 **How to apply:** Lock the natural-language answer first, then audit it without rewriting or blocking it; remove internal PCA headings and citation placeholders from user-facing text while retaining the full audit in state and exports.
+
+Firekeeper OS reports are intentionally separated into User Report, Analyst Report, and Developer Trace; decision matrices and audit details belong to Analyst Report, while runtime lineage belongs only to Developer Trace.
+
+**Why:** Mixing the normal answer with audit cards made the mobile response repetitive and exposed implementation detail to users.
+
+**How to apply:** Keep the user answer fixed and readable by default, expose the two diagnostic layers on demand, and preserve the same three-layer boundaries in API responses, shares, HTML, and PDF exports.

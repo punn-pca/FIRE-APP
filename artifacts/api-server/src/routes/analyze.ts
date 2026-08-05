@@ -333,6 +333,83 @@ export interface PCAState {
   end_time: string;
 }
 
+export interface UserReport {
+  answer: string;
+  route: IntentRoute;
+  confidence: PCAState["confidence"];
+  limitations: string[];
+  next_step?: string;
+}
+
+export interface AnalystReport {
+  evidence_report: EvidenceReport;
+  knowledge_map: KnowledgeMap;
+  missing_info: string[];
+  conflicts: ConflictFinding[];
+  confidence_report: ConfidenceReport;
+  verification: VerificationReport;
+  logical_verification: LogicalVerification;
+  reasoning_quality: ReasoningQualityMetrics;
+  decision_matrix?: DecisionMatrix;
+}
+
+export interface DeveloperTrace {
+  notes: string[];
+  runtime_summary: RuntimeSummary;
+  runtime_lifecycle: RuntimeEvent[];
+  trace: TraceEntry[];
+  dataflow: DataflowEdge[];
+  runtime_metrics: ModuleRuntimeMetric[];
+  module_audit: ModuleAudit[];
+  state_transitions: StateTransition[];
+  reasoning_graph: ReasoningGraph;
+}
+
+export interface ReportLayers {
+  user_report: UserReport;
+  analyst_report: AnalystReport;
+  developer_trace: DeveloperTrace;
+}
+
+export function buildReportLayers(state: PCAState): ReportLayers {
+  const selected = state.decision_matrix.options.find(
+    (option) => option.id === state.decision_matrix.selected_option
+  );
+  return {
+    user_report: {
+      answer: state.response,
+      route: state.intent,
+      confidence: state.confidence,
+      limitations: state.missing_info.slice(0, 3),
+      ...(state.intent.type === "decision" && selected
+        ? { next_step: `พิจารณาทางเลือก “${selected.label}” โดยตรวจสอบข้อมูลสำคัญเพิ่มเติมก่อนตัดสินใจ` }
+        : {}),
+    },
+    analyst_report: {
+      evidence_report: state.evidence_report,
+      knowledge_map: state.knowledge_map,
+      missing_info: state.missing_info,
+      conflicts: state.conflict_findings,
+      confidence_report: state.confidence_report,
+      verification: state.verification,
+      logical_verification: state.logical_verification,
+      reasoning_quality: state.reasoning_quality,
+      ...(state.intent.type === "decision" ? { decision_matrix: state.decision_matrix } : {}),
+    },
+    developer_trace: {
+      notes: state.notes,
+      runtime_summary: state.runtime_summary,
+      runtime_lifecycle: state.runtime_lifecycle,
+      trace: state.trace,
+      dataflow: state.dataflow,
+      runtime_metrics: state.runtime_metrics,
+      module_audit: state.module_audit,
+      state_transitions: state.state_transitions,
+      reasoning_graph: state.reasoning_graph,
+    },
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const THAI_REGEX = /[\u0E00-\u0E7F]/;
@@ -2726,6 +2803,7 @@ router.post("/", async (req, res) => {
 
     res.json({
       response: state.response,
+      reports: buildReportLayers(state),
       pcaState: {
         notes: state.notes,
         observations: state.observations,

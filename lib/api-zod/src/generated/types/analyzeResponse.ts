@@ -6,8 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PCAState } from './pCAState';
+import type { ReportLayers } from './reportLayers';
 
 export interface AnalyzeResponse {
   response: string;
+  reports: ReportLayers;
   pcaState: PCAState;
 }

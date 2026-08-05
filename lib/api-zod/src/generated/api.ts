@@ -49,6 +49,197 @@ export const AnalyzeQuestionBody = zod.object({
 
 export const AnalyzeQuestionResponse = zod.object({
   "response": zod.string(),
+  "reports": zod.object({
+  "user_report": zod.object({
+  "answer": zod.string(),
+  "route": zod.object({
+  "type": zod.enum(['explanatory', 'decision', 'summary', 'comparison', 'general']),
+  "confidence": zod.number(),
+  "rationale": zod.string(),
+  "signals": zod.array(zod.string()),
+  "pipeline": zod.enum(['explanation', 'decision', 'summary', 'comparison', 'general'])
+}),
+  "confidence": zod.enum(['สูง', 'ปานกลาง', 'ต่ำ', 'ไม่สามารถประเมินได้']),
+  "limitations": zod.array(zod.string()),
+  "next_step": zod.string().optional()
+}),
+  "analyst_report": zod.object({
+  "evidence_report": zod.object({
+  "methodology": zod.string(),
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "source": zod.enum(['user_input', 'conversation_history', 'memory', 'knowledge_base']),
+  "text": zod.string(),
+  "relevance_score": zod.number(),
+  "quality_score": zod.number(),
+  "consistency_score": zod.number(),
+  "composite_score": zod.number(),
+  "basis": zod.array(zod.string())
+})),
+  "aggregate_score": zod.number(),
+  "coverage_score": zod.number()
+}),
+  "knowledge_map": zod.record(zod.string(), zod.unknown()),
+  "missing_info": zod.array(zod.string()),
+  "conflicts": zod.array(zod.record(zod.string(), zod.unknown())),
+  "confidence_report": zod.object({
+  "score": zod.number(),
+  "band": zod.enum(['สูง', 'ปานกลาง', 'ต่ำ', 'ไม่สามารถประเมินได้']),
+  "method": zod.string(),
+  "components": zod.record(zod.string(), zod.number()),
+  "verification_score": zod.number()
+}),
+  "verification": zod.object({
+  "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
+  "consistency": zod.enum(['สอดคล้อง', 'ต้องทบทวน']),
+  "expected": zod.array(zod.string()),
+  "observed": zod.array(zod.string()),
+  "checks": zod.array(zod.string()),
+  "detailed_checks": zod.array(zod.object({
+  "criterion": zod.string(),
+  "rule": zod.string(),
+  "passed": zod.boolean(),
+  "evidence": zod.string(),
+  "score": zod.number()
+})),
+  "score": zod.number()
+}),
+  "logical_verification": zod.object({
+  "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
+  "checks": zod.array(zod.object({
+  "criterion": zod.string(),
+  "rule": zod.string(),
+  "passed": zod.boolean(),
+  "evidence": zod.string(),
+  "score": zod.number()
+})),
+  "score": zod.number()
+}),
+  "reasoning_quality": zod.object({
+  "evidence_count": zod.number(),
+  "evidence_coverage": zod.number(),
+  "evidence_quality": zod.number(),
+  "memory_hits": zod.number(),
+  "hypothesis_count": zod.number(),
+  "conflict_count": zod.number(),
+  "missing_information_count": zod.number(),
+  "unsupported_claim_count": zod.number(),
+  "verification_pass_rate": zod.number(),
+  "decision_margin": zod.number()
+}),
+  "decision_matrix": zod.object({
+  "methodology": zod.string(),
+  "criteria_weights": zod.record(zod.string(), zod.number()),
+  "options": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "rationale": zod.string(),
+  "criteria": zod.record(zod.string(), zod.number()),
+  "weighted_score": zod.number(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "selected_option": zod.string(),
+  "selected_score": zod.number(),
+  "selection_reason": zod.string()
+}).optional()
+}),
+  "developer_trace": zod.object({
+  "notes": zod.array(zod.string()),
+  "runtime_summary": zod.object({
+  "cognitive": zod.object({
+  "total_ms": zod.number(),
+  "pre_llm_ms": zod.number(),
+  "post_llm_ms": zod.number(),
+  "measured_stage_count": zod.number(),
+  "phase_count": zod.number()
+}),
+  "llm": zod.object({
+  "provider": zod.string(),
+  "model": zod.string(),
+  "request_ms": zod.number(),
+  "retry_count": zod.number(),
+  "prompt_tokens": zod.number().optional(),
+  "completion_tokens": zod.number().optional(),
+  "total_tokens": zod.number().optional()
+})
+}),
+  "runtime_lifecycle": zod.array(zod.record(zod.string(), zod.unknown())),
+  "trace": zod.array(zod.record(zod.string(), zod.unknown())),
+  "dataflow": zod.array(zod.object({
+  "id": zod.string(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "outputs": zod.array(zod.string()),
+  "inputs": zod.array(zod.string()),
+  "transformation": zod.string(),
+  "item_count": zod.number()
+})),
+  "runtime_metrics": zod.array(zod.object({
+  "module": zod.string(),
+  "duration_ms": zod.number(),
+  "input_count": zod.number(),
+  "output_count": zod.number(),
+  "evidence_count": zod.number(),
+  "hypothesis_count": zod.number(),
+  "memory_hits": zod.number(),
+  "missing_info_count": zod.number(),
+  "conflict_count": zod.number()
+})),
+  "module_audit": zod.array(zod.object({
+  "module": zod.string(),
+  "algorithm": zod.string(),
+  "input_count": zod.number(),
+  "score": zod.number().optional(),
+  "findings": zod.array(zod.string()),
+  "calculations": zod.record(zod.string(), zod.unknown()),
+  "metrics": zod.object({
+  "module": zod.string(),
+  "duration_ms": zod.number(),
+  "input_count": zod.number(),
+  "output_count": zod.number(),
+  "evidence_count": zod.number(),
+  "hypothesis_count": zod.number(),
+  "memory_hits": zod.number(),
+  "missing_info_count": zod.number(),
+  "conflict_count": zod.number()
+}).optional()
+})),
+  "state_transitions": zod.array(zod.object({
+  "id": zod.string(),
+  "module": zod.string(),
+  "state_field": zod.string(),
+  "before": zod.unknown(),
+  "after": zod.unknown(),
+  "trigger": zod.string(),
+  "impact": zod.string()
+})),
+  "reasoning_graph": zod.object({
+  "claims": zod.array(zod.object({
+  "id": zod.string(),
+  "text": zod.string(),
+  "type": zod.enum(['fact', 'assumption', 'conclusion', 'unknown']),
+  "status": zod.enum(['supported', 'partial', 'unsupported']),
+  "source_module": zod.string(),
+  "evidence_ids": zod.array(zod.string()),
+  "assumption_ids": zod.array(zod.string()),
+  "conflict_ids": zod.array(zod.string()),
+  "decision_option_id": zod.string().optional(),
+  "support_score": zod.number()
+})),
+  "edges": zod.array(zod.object({
+  "id": zod.string(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "relation": zod.enum(['supports', 'assumes', 'contradicts', 'influences']),
+  "weight": zod.number(),
+  "rationale": zod.string()
+})),
+  "selected_option": zod.string(),
+  "unsupported_claim_count": zod.number(),
+  "methodology": zod.string()
+})
+})
+}),
   "pcaState": zod.object({
   "user_input": zod.string(),
   "language": zod.enum(['th', 'en']),
