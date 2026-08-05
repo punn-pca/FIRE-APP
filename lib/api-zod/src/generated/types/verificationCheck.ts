@@ -6,6 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface VerificationCheck {
+  criterion: string;
+  rule: string;
+  passed: boolean;
+  evidence: string;
+  score: number;
 }

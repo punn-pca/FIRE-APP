@@ -13,6 +13,9 @@ import {
   buildWorkingMemory,
   analyzeConflictFindings,
   buildEvidenceReport,
+  buildConfidenceReport,
+  buildVerificationReport,
+  buildSystemPrompt,
   type PCAState,
   type ConversationTurn,
   type ContextValidation,
@@ -103,6 +106,17 @@ describe("detectConflicts — clear reversal", () => {
   assert("Structured conflict finding has severity", findings[0]?.severity === "ปานกลาง");
 });
 
+describe("detectConflicts — negative polarity reversal", () => {
+  const history: ConversationTurn[] = [
+    { role: "assistant", content: "จากข้อมูลก่อนหน้า ไม่แนะนำหุ้นเทคโนโลยีในตอนนี้" },
+  ];
+  const question = "ถ้าอย่างนั้น แนะนำหุ้นเทคโนโลยีหรือไม่";
+  const result = detectConflicts(question, history);
+  const findings = analyzeConflictFindings(question, history);
+  assert("Negative prior and positive current signal are detected", result.length > 0);
+  assert("Structured negative reversal has evidence", findings.length > 0 && findings[0].evidence.length > 0);
+});
+
 describe("detectConflicts — consistent follow-up", () => {
   const history: ConversationTurn[] = [
     { role: "user", content: "กาแฟดีต่อสุขภาพไหม" },
@@ -176,6 +190,149 @@ describe("buildEvidenceReport — weighted evidence scoring", () => {
   assert("Evidence items contain component scores", report.items.every((item) =>
     item.relevance_score >= 0 && item.quality_score >= 0 && item.composite_score >= 0
   ));
+});
+
+describe("buildEvidenceReport — irrelevant short history is excluded", () => {
+  const report = buildEvidenceReport(
+    "ช่วยวางแผนการเกษียณ",
+    [
+      { role: "user", content: "วันนี้ฝนตกหนักมาก" },
+      { role: "assistant", content: "ควรพกร่มและตรวจสอบการจราจร" },
+    ],
+    []
+  );
+  assert(
+    "Unrelated short history is not evidence",
+    !report.items.some((item) => item.source === "conversation_history")
+  );
+});
+
+function makeVerificationState(): PCAState {
+  return {
+    user_input: "ช่วยวิเคราะห์ทางเลือก",
+    language: "th",
+    observations: [],
+    understanding: "",
+    purpose: "",
+    constraints: [],
+    memories: [],
+    hypotheses: [{ claim: "สมมติฐาน: ข้อมูลอาจไม่ครบ", confidence: 0.5 }],
+    evidence: [],
+    critique: [],
+    uncertainty: [],
+    decision: "เสนอทางเลือก",
+    response: "",
+    reflection: [],
+    learning: [],
+    agency_checks: [],
+    notes: [],
+    confidence: "ปานกลาง",
+    conflicts: [],
+    conflict_findings: [],
+    missing_info: [],
+    evidence_report: {
+      methodology: "test",
+      items: [{
+        id: "evidence-input",
+        source: "user_input",
+        text: "ข้อมูลจากผู้ใช้",
+        relevance_score: 1,
+        quality_score: 0.5,
+        consistency_score: 1,
+        composite_score: 0.8,
+        basis: [],
+      }],
+      aggregate_score: 0.8,
+      coverage_score: 1,
+    },
+    confidence_report: {
+      score: 0,
+      band: "ปานกลาง",
+      method: "",
+      components: {},
+      verification_score: 0,
+    },
+    module_audit: [],
+    runtime_lifecycle: [],
+    governance: {
+      status: "ผ่าน",
+      policy: [],
+      safety_checks: [],
+      human_agency_preserved: true,
+    },
+    verification: {
+      status: "ต้องตรวจสอบ",
+      consistency: "สอดคล้อง",
+      expected: [],
+      observed: [],
+      checks: [],
+      detailed_checks: [],
+      score: 0,
+    },
+    knowledge_map: { facts: [], assumptions: [], unknowns: [] },
+    trace: [],
+    llm_provider: "test",
+    llm_model: "test",
+    execution_time_ms: 0,
+    start_time: "",
+    end_time: "",
+  };
+}
+
+describe("buildVerificationReport — substantive checks", () => {
+  const state = makeVerificationState();
+  const generic = buildVerificationReport(
+    state,
+    "[ข้อเท็จจริง]\nหลักฐาน\n[สมมติฐาน]\nสมมติฐาน\nผู้ใช้ตัดสินใจขั้นสุดท้าย"
+  );
+  const grounded = buildVerificationReport(
+    state,
+    "[ข้อเท็จจริง]\nโครงการมีงบประมาณจำกัดตามข้อมูลจากผู้ใช้ [หลักฐาน: evidence-input]\n" +
+      "[สมมติฐาน]\nอาจต้องแบ่งการลงทุนเป็นระยะ\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
+  );
+  assert("Keyword-only answer does not pass evidence alignment", generic.detailed_checks.find(
+    (check) => check.criterion === "evidence_alignment"
+  )?.passed === false);
+  assert("Grounded answer passes evidence alignment", grounded.detailed_checks.find(
+    (check) => check.criterion === "evidence_alignment"
+  )?.passed === true);
+});
+
+describe("buildConfidenceReport — history and memory are separate", () => {
+  const state = makeVerificationState();
+  state.memories = [{
+    content: "memory",
+    layer: "long-term",
+    source: "test",
+    confidence: 0.9,
+    retrieval_score: 0.8,
+  }];
+  const report = buildConfidenceReport(state, 0);
+  assert("Memory-only state has no history support", report.components.history_support === 0);
+  assert("Memory-only state retains memory support", report.components.memory_support === 0.8);
+});
+
+describe("buildSystemPrompt — computed controls are injected", () => {
+  const state = makeVerificationState();
+  state.module_audit = [{
+    module: "Decision",
+    algorithm: "test",
+    input_count: 1,
+    score: 0.8,
+    findings: [],
+    calculations: {},
+  }];
+  const prompt = buildSystemPrompt(
+    state,
+    "Formal Architect",
+    false,
+    "",
+    "",
+    { richness: "moderate", missingSignals: [] },
+    []
+  );
+  assert("Prompt includes evidence id", prompt.includes("[หลักฐาน: evidence-input]"));
+  assert("Prompt includes decision output", prompt.includes("เสนอทางเลือก"));
 });
 
 // ─── 2. buildWorkingMemory ────────────────────────────────────────────────────

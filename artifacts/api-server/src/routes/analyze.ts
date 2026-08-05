@@ -286,6 +286,22 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+type ReversalPattern = {
+  type?: "reversal";
+  a: RegExp;
+  b: RegExp;
+};
+
+function getPolarity(text: string, pattern: ReversalPattern): "positive" | "negative" | "mixed" | "none" {
+  const withoutNegative = text.replace(pattern.b, "");
+  const hasPositive = pattern.a.test(withoutNegative);
+  const hasNegative = pattern.b.test(text);
+  if (hasPositive && hasNegative) return "mixed";
+  if (hasPositive) return "positive";
+  if (hasNegative) return "negative";
+  return "none";
+}
+
 export function analyzeConflictFindings(
   question: string,
   history: ConversationTurn[]
@@ -300,11 +316,12 @@ export function analyzeConflictFindings(
 
   for (const [index, prev] of prevAssistant.entries()) {
     for (const pattern of reversalPatterns) {
-      const prevSaysA = pattern.a.test(prev.content) && !pattern.b.test(prev.content);
-      const questionSaysB = pattern.b.test(question);
-      const prevSaysB = pattern.b.test(prev.content) && !pattern.a.test(prev.content);
-      const questionSaysA = pattern.a.test(question);
-      if ((prevSaysA && questionSaysB) || (prevSaysB && questionSaysA)) {
+      const previousPolarity = getPolarity(prev.content, pattern);
+      const currentPolarity = getPolarity(question, pattern);
+      if (
+        (previousPolarity === "positive" && currentPolarity === "negative") ||
+        (previousPolarity === "negative" && currentPolarity === "positive")
+      ) {
         findings.push({
           id: `conflict-${index + 1}`,
           type: pattern.type,
@@ -363,7 +380,7 @@ export function buildEvidenceReport(
 
   history.slice(-6).forEach((turn, index) => {
     const relevance = overlapScore(question, turn.content);
-    if (relevance > 0 || history.length <= 2) {
+    if (relevance >= MEMORY_RELEVANCE_THRESHOLD) {
       addItem(
         `evidence-history-${index + 1}`,
         "conversation_history",
@@ -398,7 +415,7 @@ export function buildEvidenceReport(
     : 0;
   const coverage_score = Number(
     clamp01(
-      (items.filter((item) => item.source !== "user_input" && item.relevance_score > 0).length + 1) /
+      (items.filter((item) => item.source !== "user_input" && item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).length + 1) /
       (history.length > 0 || memories.length > 0 ? 3 : 1)
     ).toFixed(3)
   );
@@ -414,15 +431,16 @@ export function buildConfidenceReport(
   state: PCAState,
   verificationScore = 0
 ): ConfidenceReport {
-  const contextScore = state.notes.some((note) => note.includes("context"))
-    ? 0.5
-    : state.knowledge_map.unknowns.length === 0
-      ? 1
-      : 0.45;
+  const contextScore = state.missing_info.length === 0
+    ? 1
+    : clamp01(1 - state.missing_info.length * 0.2);
   const inputScore = clamp01(state.user_input.trim().length / 55);
-  const historyScore = clamp01(state.memories.length > 0 ? 0.75 : state.evidence_report.items.some(
+  const historyItems = state.evidence_report.items.filter(
     (item) => item.source === "conversation_history"
-  ) ? 0.6 : 0);
+  );
+  const historyScore = historyItems.length
+    ? clamp01(historyItems.reduce((sum, item) => sum + item.relevance_score, 0) / historyItems.length)
+    : 0;
   const memoryScore = clamp01(
     state.memories.length === 0
       ? 0
@@ -509,27 +527,40 @@ function buildKnowledgeMap(
   };
 }
 
-function buildVerificationReport(
+export function buildVerificationReport(
   state: PCAState,
   responseText: string
 ): VerificationReport {
   const checks: string[] = [];
   const detailed_checks: VerificationCheck[] = [];
-  const hasFactLabel = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText);
-  const hasAssumptionLabel = /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
+  const hasSubstantiveLabel = (labels: RegExp): boolean => {
+    const match = labels.exec(responseText);
+    if (!match) return false;
+    const followingText = responseText.slice(match.index + match[0].length).split(/\n(?=#|\[)/, 1)[0];
+    return followingText.replace(/[:：\s\-*]/g, "").trim().length >= 12;
+  };
+  const hasFactLabel = hasSubstantiveLabel(/\[ข้อเท็จจริง\]|\[Fact\]/i);
+  const hasAssumptionLabel = hasSubstantiveLabel(/\[สมมติฐาน\]|\[Assumption\]/i);
   const preservesAgency = /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
     responseText
   );
   const surfacesMissingInfo =
     state.missing_info.length === 0 ||
-    state.missing_info.some((missing) => responseText.includes(missing)) ||
-    /\[ข้อมูลที่ขาด\]|\[missing information\]|ข้อมูลที่ต้องการเพิ่ม/i.test(responseText);
+    (
+      /\[ข้อมูลที่ขาด\]|\[missing information\]|ข้อมูลที่ต้องการเพิ่ม/i.test(responseText) &&
+      state.missing_info.some((missing) => responseText.includes(missing) || /ยังไม่มีข้อมูล|ยังไม่ทราบ|ต้องการข้อมูลเพิ่ม/i.test(responseText))
+    );
+  const evidenceIds = state.evidence_report.items.map((item) => item.id);
+  const citedEvidenceIds = evidenceIds.filter((id) => responseText.includes(`[หลักฐาน: ${id}]`));
   const acknowledgesEvidence =
     state.evidence_report.items.length === 0 ||
-    /\[ข้อเท็จจริง\]|\[fact\]|หลักฐาน|evidence/i.test(responseText);
+    citedEvidenceIds.length > 0;
   const acknowledgesConflicts =
     state.conflict_findings.length === 0 ||
-    /ขัดแย้ง|ทบทวน|สอดคล้อง|conflict|consistency|review/i.test(responseText);
+    state.conflict_findings.some((finding) =>
+      responseText.includes(`[ความขัดแย้ง: ${finding.id}]`) ||
+      responseText.includes(finding.id)
+    );
 
   checks.push(
     hasFactLabel
@@ -581,16 +612,16 @@ function buildVerificationReport(
     },
     {
       criterion: "evidence_alignment",
-      rule: "response ต้องอ้างถึงหลักฐานหรือข้อเท็จจริงที่ pipeline ประเมินไว้",
+      rule: "response ต้องอ้างอิง evidence id ด้วยรูปแบบ [หลักฐาน: evidence-id]",
       passed: acknowledgesEvidence,
       evidence: acknowledgesEvidence
-        ? `เชื่อมกับ evidence ${state.evidence_report.items.length} รายการ`
-        : "ไม่พบการอ้างหลักฐาน",
+        ? `อ้างอิง evidence ${citedEvidenceIds.join(", ")}`
+        : "ไม่พบ evidence id ที่ pipeline อนุญาต",
       score: acknowledgesEvidence ? 1 : 0,
     },
     {
       criterion: "conflict_acknowledgement",
-      rule: "เมื่อพบ conflict ต้องมีข้อความให้ทบทวนความสอดคล้อง",
+      rule: "เมื่อพบ conflict ต้องอ้างอิง conflict id ด้วยรูปแบบ [ความขัดแย้ง: conflict-id]",
       passed: acknowledgesConflicts,
       evidence: acknowledgesConflicts
         ? "response สะท้อนสถานะความสอดคล้อง"
@@ -691,11 +722,13 @@ export function detectConflicts(question: string, history: ConversationTurn[]): 
 
   for (const prev of prevAssistant) {
     for (const { a, b } of reversalPatterns) {
-      const prevSaysA = a.test(prev.content) && !b.test(prev.content);
-      const questionSaysB = b.test(question);
-      const prevSaysB = b.test(prev.content) && !a.test(prev.content);
-      const questionSaysA = a.test(question);
-      if ((prevSaysA && questionSaysB) || (prevSaysB && questionSaysA)) {
+      const pattern = { a, b };
+      const previousPolarity = getPolarity(prev.content, pattern);
+      const currentPolarity = getPolarity(question, pattern);
+      if (
+        (previousPolarity === "positive" && currentPolarity === "negative") ||
+        (previousPolarity === "negative" && currentPolarity === "positive")
+      ) {
         conflicts.push(
           "ตรวจพบแนวโน้มขัดแย้งกับการวิเคราะห์ก่อนหน้า — กำลังตรวจสอบความสอดคล้อง"
         );
@@ -1106,7 +1139,7 @@ function stageLearning(state: PCAState) {
 
 // ─── Communication Prompt ─────────────────────────────────────────────────────
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   state: PCAState,
   tone: string,
   deepReasoning: boolean,
@@ -1152,6 +1185,30 @@ function buildSystemPrompt(
       ? `\n⚠️ ตรวจพบความขัดแย้งที่อาจเกิดขึ้น: ${conflicts.join("; ")}\nกรุณาตรวจสอบความสอดคล้องก่อนตอบ`
       : "";
 
+  const evidenceSection = `
+หลักฐานที่ pipeline อนุญาตให้อ้างอิง:
+${state.evidence_report.items.map((item) =>
+  `- [หลักฐาน: ${item.id}] source=${item.source}, relevance=${item.relevance_score.toFixed(3)}, composite=${item.composite_score.toFixed(3)}: ${item.text}`
+).join("\n")}
+หากใช้หลักฐาน ให้ใส่ evidence id ในเนื้อหาด้วยรูปแบบ [หลักฐาน: evidence-id] และห้ามอ้างหลักฐานที่ไม่มีในรายการนี้`;
+
+  const decisionSection = `
+ข้อกำหนดจาก Decision module:
+- decision: ${state.decision}
+- aggregation score: ${state.module_audit.find((audit) => audit.module === "Decision")?.score?.toFixed(3) ?? "0.000"}
+- evidence aggregate: ${state.evidence_report.aggregate_score.toFixed(3)}
+- missing information: ${state.missing_info.length > 0 ? state.missing_info.join("; ") : "ไม่พบ"}
+- confidence ต้องไม่เกินระดับที่หลักฐานรองรับ และผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`;
+
+  const conflictSection = state.conflict_findings.length > 0
+    ? `
+ความขัดแย้งที่ต้องตรวจสอบ:
+${state.conflict_findings.map((finding) =>
+  `- [ความขัดแย้ง: ${finding.id}] severity=${finding.severity}: ${finding.prior_signal} → ${finding.current_signal}`
+).join("\n")}
+หากกล่าวถึง conflict ต้องอ้างอิง conflict id ด้วยรูปแบบ [ความขัดแย้ง: conflict-id]`
+    : "\nไม่พบ conflict ที่ต้องอ้างอิงจาก pipeline";
+
   // 5. Fact/Assumption/Missing separation — 7. Self-consistency — 9. Graceful fallback
   const coreRules = `
 กฎสำคัญ (บังคับทุกข้อ):
@@ -1165,12 +1222,15 @@ function buildSystemPrompt(
   · [ข้อมูลที่ขาด] — ต้องการแต่ไม่มี ให้ระบุและขอเพิ่มเติม
 - 4. ห้ามให้ความมั่นใจสูง (สูง) เมื่อข้อมูลไม่เพียงพอ ให้ระบุ "ต่ำ" หรือ "ไม่สามารถประเมินได้" แทน
 - 9. Graceful Fallback: หากข้อมูลไม่พอ ให้ระบุ [ข้อมูลที่ขาด] และเสนอสมมติฐานชัดเจน ห้ามเดาโดยไม่แจ้ง
-- 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน`;
+ - 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน
+ - ต้องมีเนื้อหาจริงหลัง [ข้อเท็จจริง] และ [สมมติฐาน] ไม่ใช่เพียงการกล่าวถึง label
+ - หากมีหลักฐาน ให้แสดงการอ้างอิงแบบ [หลักฐาน: evidence-id] อย่างน้อยหนึ่งรายการ
+ - หากมี conflict ให้แสดงการอ้างอิงแบบ [ความขัดแย้ง: conflict-id] พร้อมเหตุผล`;
 
   if (deepReasoning) {
     return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
 
-${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}
+${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}${evidenceSection}${decisionSection}${conflictSection}
 ${coreRules}
 
 คุณต้องวิเคราะห์เชิงลึกเต็มรูปแบบ โดยใช้กรอบ FIRE:
@@ -1206,7 +1266,7 @@ ${coreRules}
 
   return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)
 
-${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}
+${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}${evidenceSection}${decisionSection}${conflictSection}
 ${coreRules}
 
 กรอบการวิเคราะห์ PUNN FIRE:
@@ -1401,29 +1461,53 @@ router.post("/", async (req, res) => {
     // LLM Communication — timed separately (async, can be seconds)
     const llmStartedAt = new Date().toISOString();
     const llmStart = monotonicMs();
-    const completion = await getOpenAI().chat.completions.create({
+    const requestCompletion = (correction = "") => getOpenAI().chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         ...historyMessages,
         { role: "user", content: question },
+        ...(correction ? [{
+          role: "system" as const,
+          content: `ผลตรวจสอบรอบแรกไม่ผ่าน: ${correction}\nกรุณาสร้างคำตอบใหม่ให้ครบถ้วนตามหลักฐานและรูปแบบอ้างอิงที่กำหนด ห้ามเพียงเพิ่ม keyword โดยไม่มีเนื้อหาสนับสนุน`,
+        }] : []),
       ],
       max_completion_tokens: deepReasoning ? 3000 : 1800,
       temperature: 0.7,
     });
+
+    let completion = await requestCompletion();
+    let responseText = completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
+    let initialVerification = buildVerificationReport(state, responseText);
+    let retryCount = 0;
+    if (initialVerification.status !== "ผ่าน") {
+      retryCount = 1;
+      const failedChecks = initialVerification.detailed_checks
+        .filter((check) => !check.passed)
+        .map((check) => `${check.criterion}: ${check.rule}`)
+        .join("; ");
+      completion = await requestCompletion(failedChecks);
+      responseText = completion.choices[0]?.message?.content ?? responseText;
+    }
     const llmEndedAt = new Date().toISOString();
     const llmMs = Number((monotonicMs() - llmStart).toFixed(3));
-    recordRuntime(state, "RESPOND", "สื่อสารผลวิเคราะห์ผ่าน LLM", llmMs, llmStartedAt, llmEndedAt);
+    recordRuntime(
+      state,
+      "RESPOND",
+      retryCount > 0 ? "สื่อสารผลวิเคราะห์ผ่าน LLM และ retry หลัง verification" : "สื่อสารผลวิเคราะห์ผ่าน LLM",
+      llmMs,
+      llmStartedAt,
+      llmEndedAt
+    );
 
-    const responseText =
-      completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
     state.response = responseText;
     state.llm_model = completion.model ?? "gpt-4o";
     state.notes.push(`LLM: openai (${state.llm_model})`);
+    if (retryCount > 0) state.notes.push("Verification retry: 1");
     recordMeasured(
       state,
       "COMMUNICATION",
-      { response_length: responseText.length, model: state.llm_model },
+      { response_length: responseText.length, model: state.llm_model, retry_count: retryCount },
       llmStartedAt,
       llmEndedAt,
       llmMs

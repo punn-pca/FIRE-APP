@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: analyze
+    description: Firekeeper cognitive analysis
 paths:
   /healthz:
     get:
@@ -24,6 +26,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /analyze:
+    post:
+      operationId: analyzeQuestion
+      tags: [analyze]
+      summary: Analyze a question through the Firekeeper PCA pipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+      responses:
+        "200":
+          description: Analysis result with structured PCA audit metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeResponse"
+        "400":
+          description: Invalid request
+        "500":
+          description: Analysis failure
 components:
   schemas:
     HealthStatus:
@@ -33,4 +57,136 @@ components:
           type: string
       required:
         - status
+    ConversationTurn:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+      required: [role, content]
+    MemoryItem:
+      type: object
+      properties:
+        content: { type: string }
+        layer: { type: string }
+        source: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        retrieval_score: { type: number, minimum: 0, maximum: 1 }
+      required: [content, layer, source, confidence]
+    AnalyzeRequest:
+      type: object
+      properties:
+        question: { type: string, minLength: 1 }
+        tone: { type: string }
+        deepReasoning: { type: boolean }
+        personalContext: { type: string }
+        memories:
+          type: array
+          items: { $ref: "#/components/schemas/MemoryItem" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationTurn" }
+      required: [question]
+    EvidenceItem:
+      type: object
+      properties:
+        id: { type: string }
+        source:
+          type: string
+          enum: [user_input, conversation_history, memory]
+        text: { type: string }
+        relevance_score: { type: number }
+        quality_score: { type: number }
+        consistency_score: { type: number }
+        composite_score: { type: number }
+        basis:
+          type: array
+          items: { type: string }
+      required: [id, source, text, relevance_score, quality_score, consistency_score, composite_score, basis]
+    EvidenceReport:
+      type: object
+      properties:
+        methodology: { type: string }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/EvidenceItem" }
+        aggregate_score: { type: number }
+        coverage_score: { type: number }
+      required: [methodology, items, aggregate_score, coverage_score]
+    VerificationCheck:
+      type: object
+      properties:
+        criterion: { type: string }
+        rule: { type: string }
+        passed: { type: boolean }
+        evidence: { type: string }
+        score: { type: number }
+      required: [criterion, rule, passed, evidence, score]
+    VerificationReport:
+      type: object
+      properties:
+        status: { type: string, enum: [ผ่าน, ต้องตรวจสอบ] }
+        consistency: { type: string, enum: [สอดคล้อง, ต้องทบทวน] }
+        expected: { type: array, items: { type: string } }
+        observed: { type: array, items: { type: string } }
+        checks: { type: array, items: { type: string } }
+        detailed_checks:
+          type: array
+          items: { $ref: "#/components/schemas/VerificationCheck" }
+        score: { type: number }
+      required: [status, consistency, expected, observed, checks, detailed_checks, score]
+    ConfidenceReport:
+      type: object
+      properties:
+        score: { type: number }
+        band: { type: string, enum: [สูง, ปานกลาง, ต่ำ, ไม่สามารถประเมินได้] }
+        method: { type: string }
+        components:
+          type: object
+          additionalProperties: { type: number }
+        verification_score: { type: number }
+      required: [score, band, method, components, verification_score]
+    ModuleAudit:
+      type: object
+      properties:
+        module: { type: string }
+        algorithm: { type: string }
+        input_count: { type: number }
+        score: { type: number }
+        findings: { type: array, items: { type: string } }
+        calculations:
+          type: object
+          additionalProperties: {}
+      required: [module, algorithm, input_count, findings, calculations]
+    PCAState:
+      type: object
+      properties:
+        user_input: { type: string }
+        language: { type: string, enum: [th, en] }
+        understanding: { type: string }
+        purpose: { type: string }
+        decision: { type: string }
+        confidence: { type: string, enum: [สูง, ปานกลาง, ต่ำ, ไม่สามารถประเมินได้] }
+        conflicts: { type: array, items: { type: string } }
+        conflict_findings: { type: array, items: { type: object, additionalProperties: true } }
+        missing_info: { type: array, items: { type: string } }
+        evidence_report: { $ref: "#/components/schemas/EvidenceReport" }
+        confidence_report: { $ref: "#/components/schemas/ConfidenceReport" }
+        module_audit:
+          type: array
+          items: { $ref: "#/components/schemas/ModuleAudit" }
+        verification: { $ref: "#/components/schemas/VerificationReport" }
+        runtime_lifecycle: { type: array, items: { type: object, additionalProperties: true } }
+        governance: { type: object, additionalProperties: true }
+        knowledge_map: { type: object, additionalProperties: true }
+        trace: { type: array, items: { type: object, additionalProperties: true } }
+      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, verification]
+    AnalyzeResponse:
+      type: object
+      properties:
+        response: { type: string }
+        pcaState: { $ref: "#/components/schemas/PCAState" }
+      required: [response, pcaState]
 

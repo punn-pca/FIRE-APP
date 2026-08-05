@@ -20,3 +20,9 @@ Auditable metadata is not sufficient if it is only post-hoc: evidence, decision,
 **Why:** A review found that a model can produce an answer independently of the computed audit artifacts, while keyword-only verification can still raise confidence. That creates explainability without causal control.
 
 **How to apply:** Treat module outputs as control inputs to the communication stage, verify substantive grounding rather than keyword presence, and test route-level influence—not only pure helper functions.
+
+Generated API clients are part of the runtime contract, not only type artifacts: after OpenAPI codegen, the Expo/Metro workflow must be restarted cleanly so the bundle resolves regenerated modules.
+
+**Why:** A stale duplicate Expo process held the managed port during contract regeneration and masked a valid generated client as a runtime import failure.
+
+**How to apply:** Run codegen before client checks, confirm generated files exist, restart the exact managed mobile workflow once, and inspect the new bundle logs before declaring the client broken.
