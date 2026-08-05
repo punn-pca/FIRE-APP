@@ -87,8 +87,81 @@ export const AnalyzeQuestionResponse = zod.object({
   "input_count": zod.number(),
   "score": zod.number().optional(),
   "findings": zod.array(zod.string()),
-  "calculations": zod.record(zod.string(), zod.unknown())
+  "calculations": zod.record(zod.string(), zod.unknown()),
+  "metrics": zod.object({
+  "module": zod.string(),
+  "duration_ms": zod.number(),
+  "input_count": zod.number(),
+  "output_count": zod.number(),
+  "evidence_count": zod.number(),
+  "hypothesis_count": zod.number(),
+  "memory_hits": zod.number(),
+  "missing_info_count": zod.number(),
+  "conflict_count": zod.number()
+}).optional()
 })),
+  "runtime_metrics": zod.array(zod.object({
+  "module": zod.string(),
+  "duration_ms": zod.number(),
+  "input_count": zod.number(),
+  "output_count": zod.number(),
+  "evidence_count": zod.number(),
+  "hypothesis_count": zod.number(),
+  "memory_hits": zod.number(),
+  "missing_info_count": zod.number(),
+  "conflict_count": zod.number()
+})),
+  "dataflow": zod.array(zod.object({
+  "id": zod.string(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "outputs": zod.array(zod.string()),
+  "inputs": zod.array(zod.string()),
+  "transformation": zod.string(),
+  "item_count": zod.number()
+})),
+  "memory_retrieval": zod.object({
+  "query": zod.string(),
+  "query_tokens": zod.array(zod.string()),
+  "algorithm": zod.string(),
+  "threshold": zod.number(),
+  "candidate_count": zod.number(),
+  "matched_count": zod.number(),
+  "hits": zod.array(zod.object({
+  "rank": zod.number(),
+  "content": zod.string(),
+  "source": zod.string(),
+  "retrieval_score": zod.number(),
+  "matched_tokens": zod.array(zod.string())
+})),
+  "miss_reason": zod.string().optional()
+}),
+  "decision_matrix": zod.object({
+  "methodology": zod.string(),
+  "criteria_weights": zod.record(zod.string(), zod.number()),
+  "options": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "rationale": zod.string(),
+  "criteria": zod.record(zod.string(), zod.number()),
+  "weighted_score": zod.number(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "selected_option": zod.string(),
+  "selected_score": zod.number(),
+  "selection_reason": zod.string()
+}),
+  "logical_verification": zod.object({
+  "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
+  "checks": zod.array(zod.object({
+  "criterion": zod.string(),
+  "rule": zod.string(),
+  "passed": zod.boolean(),
+  "evidence": zod.string(),
+  "score": zod.number()
+})),
+  "score": zod.number()
+}),
   "verification": zod.object({
   "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
   "consistency": zod.enum(['สอดคล้อง', 'ต้องทบทวน']),

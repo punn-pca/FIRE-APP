@@ -1,6 +1,7 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import { logger } from "../lib/logger";
+import { loadMemory } from "./memory";
 
 const router: Router = Router();
 
@@ -100,6 +101,72 @@ export interface ModuleAudit {
   score?: number;
   findings: string[];
   calculations: Record<string, number | string | boolean>;
+  metrics?: ModuleRuntimeMetric;
+}
+
+export interface ModuleRuntimeMetric {
+  module: string;
+  duration_ms: number;
+  input_count: number;
+  output_count: number;
+  evidence_count: number;
+  hypothesis_count: number;
+  memory_hits: number;
+  missing_info_count: number;
+  conflict_count: number;
+}
+
+export interface DataflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  outputs: string[];
+  inputs: string[];
+  transformation: string;
+  item_count: number;
+}
+
+export interface MemoryHit {
+  rank: number;
+  content: string;
+  source: string;
+  retrieval_score: number;
+  matched_tokens: string[];
+}
+
+export interface MemoryRetrievalReport {
+  query: string;
+  query_tokens: string[];
+  algorithm: string;
+  threshold: number;
+  candidate_count: number;
+  matched_count: number;
+  hits: MemoryHit[];
+  miss_reason?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  rationale: string;
+  criteria: Record<string, number>;
+  weighted_score: number;
+  evidence_ids: string[];
+}
+
+export interface DecisionMatrix {
+  methodology: string;
+  criteria_weights: Record<string, number>;
+  options: DecisionOption[];
+  selected_option: string;
+  selected_score: number;
+  selection_reason: string;
+}
+
+export interface LogicalVerification {
+  status: "ผ่าน" | "ต้องตรวจสอบ";
+  checks: VerificationCheck[];
+  score: number;
 }
 
 interface VerificationReport {
@@ -154,6 +221,11 @@ export interface PCAState {
   evidence_report: EvidenceReport;
   confidence_report: ConfidenceReport;
   module_audit: ModuleAudit[];
+  runtime_metrics: ModuleRuntimeMetric[];
+  dataflow: DataflowEdge[];
+  memory_retrieval: MemoryRetrievalReport;
+  decision_matrix: DecisionMatrix;
+  logical_verification: LogicalVerification;
   runtime_lifecycle: RuntimeEvent[];
   governance: GovernanceReport;
   verification: VerificationReport;
@@ -278,6 +350,11 @@ function overlapScore(query: string, candidate: string): number {
   return Number(
     (queryTokens.filter((token) => candidateTokens.has(token)).length / queryTokens.length).toFixed(3)
   );
+}
+
+function matchedTokens(query: string, candidate: string): string[] {
+  const candidateTokens = new Set(tokenize(candidate));
+  return tokenize(query).filter((token) => candidateTokens.has(token));
 }
 
 const MEMORY_RELEVANCE_THRESHOLD = 0.25;
@@ -892,15 +969,39 @@ function stagePurpose(state: PCAState) {
 }
 
 function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]) {
+  const queryTokens = tokenize(state.user_input);
   const ranked = memoryItems
     .map((memory) => ({
       ...memory,
       retrieval_score: overlapScore(state.user_input, memory.content),
+      matched_tokens: matchedTokens(state.user_input, memory.content),
     }))
     .sort((a, b) => (b.retrieval_score ?? 0) - (a.retrieval_score ?? 0));
   state.memories = ranked
     .filter((memory) => (memory.retrieval_score ?? 0) >= MEMORY_RELEVANCE_THRESHOLD)
     .slice(0, 5);
+  state.memory_retrieval = {
+    query: state.user_input,
+    query_tokens: queryTokens,
+    algorithm: "ranked lexical retrieval: Thai character bigram/token overlap with matched-token diagnostics",
+    threshold: MEMORY_RELEVANCE_THRESHOLD,
+    candidate_count: memoryItems.length,
+    matched_count: state.memories.length,
+    hits: state.memories.map((memory, index) => ({
+      rank: index + 1,
+      content: memory.content,
+      source: memory.source,
+      retrieval_score: Number((memory.retrieval_score ?? 0).toFixed(3)),
+      matched_tokens: matchedTokens(state.user_input, memory.content),
+    })),
+    ...(state.memories.length === 0
+      ? {
+          miss_reason: memoryItems.length === 0
+            ? "ไม่มี memory candidates ถูกส่งเข้ามาใน request"
+            : `มี ${memoryItems.length} candidates แต่ไม่มีรายการผ่าน threshold ${MEMORY_RELEVANCE_THRESHOLD}`,
+        }
+      : {}),
+  };
   const averageScore = state.memories.length
     ? state.memories.reduce((sum, memory) => sum + (memory.retrieval_score ?? 0), 0) / state.memories.length
     : 0;
@@ -917,12 +1018,16 @@ function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]
       retrieved_count: state.memories.length,
       average_retrieval_score: Number(averageScore.toFixed(3)),
       top_score: Number((state.memories[0]?.retrieval_score ?? 0).toFixed(3)),
+      query_token_count: queryTokens.length,
+      threshold: MEMORY_RELEVANCE_THRESHOLD,
     },
   });
   record(state, "MEMORY", {
     retrieved: state.memories.length,
     candidates: memoryItems.length,
     ranked_scores: state.memories.map((memory) => memory.retrieval_score),
+    query_tokens: queryTokens,
+    matched_tokens: state.memory_retrieval.hits.map((hit) => hit.matched_tokens),
     algorithm: "token_overlap",
   });
 }
@@ -989,6 +1094,223 @@ function stageEvidenceEvaluation(
     evidence: state.evidence,
     evidence_report: state.evidence_report,
     history_turns: history.length,
+  });
+}
+
+export function buildDecisionMatrix(state: PCAState, critiqueScore: number): DecisionMatrix {
+  const evidenceScore = state.evidence_report.aggregate_score;
+  const contextScore = state.missing_info.length === 0
+    ? 1
+    : clamp01(1 - state.missing_info.length * 0.2);
+  const conflictRisk = clamp01(state.conflict_findings.length * 0.2);
+  const criteria_weights = {
+    evidence_alignment: 0.4,
+    risk_control: 0.35,
+    feasibility: 0.25,
+  };
+  const options: DecisionOption[] = [
+    {
+      id: "option-immediate",
+      label: state.language === "th" ? "ดำเนินการทันที" : "Act immediately",
+      rationale: state.language === "th"
+        ? "เหมาะเมื่อหลักฐานเพียงพอ ความเสี่ยงต่ำ และบริบทครบ"
+        : "Best when evidence is sufficient, risk is low, and context is complete.",
+      criteria: {
+        evidence_alignment: Number((evidenceScore * 0.9).toFixed(3)),
+        risk_control: Number(clamp01(0.55 - conflictRisk).toFixed(3)),
+        feasibility: Number(clamp01(0.85 * contextScore).toFixed(3)),
+      },
+      weighted_score: 0,
+      evidence_ids: state.evidence_report.items.slice(0, 3).map((item) => item.id),
+    },
+    {
+      id: "option-phased",
+      label: state.language === "th" ? "ดำเนินการเป็นระยะ" : "Proceed in phases",
+      rationale: state.language === "th"
+        ? "ลดความเสี่ยงด้วยการทดลอง ตรวจสอบผล และปรับแผนเป็นช่วง ๆ"
+        : "Controls risk through staged execution, validation, and adjustment.",
+      criteria: {
+        evidence_alignment: Number(evidenceScore.toFixed(3)),
+        risk_control: Number(clamp01(0.85 - conflictRisk * 0.5).toFixed(3)),
+        feasibility: Number(clamp01(0.7 * contextScore + 0.15).toFixed(3)),
+      },
+      weighted_score: 0,
+      evidence_ids: state.evidence_report.items.filter((item) => item.composite_score >= 0.55).slice(0, 4).map((item) => item.id),
+    },
+    {
+      id: "option-defer",
+      label: state.language === "th" ? "ชะลอเพื่อเก็บข้อมูลเพิ่ม" : "Defer for more evidence",
+      rationale: state.language === "th"
+        ? "เหมาะเมื่อข้อมูลขาด ความเสี่ยงสูง หรือหลักฐานยังไม่สอดคล้อง"
+        : "Best when information is missing, risk is high, or evidence is inconsistent.",
+      criteria: {
+        evidence_alignment: Number(clamp01(1 - evidenceScore * 0.5).toFixed(3)),
+        risk_control: Number(clamp01(0.95 - conflictRisk * 0.2).toFixed(3)),
+        feasibility: Number(clamp01(0.45 + (1 - contextScore) * 0.25).toFixed(3)),
+      },
+      weighted_score: 0,
+      evidence_ids: state.evidence_report.items.filter((item) => item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).slice(0, 3).map((item) => item.id),
+    },
+  ];
+  for (const option of options) {
+    option.weighted_score = Number((
+      option.criteria.evidence_alignment * criteria_weights.evidence_alignment +
+      option.criteria.risk_control * criteria_weights.risk_control +
+      option.criteria.feasibility * criteria_weights.feasibility
+    ).toFixed(3));
+  }
+  const selected = [...options].sort((a, b) => b.weighted_score - a.weighted_score)[0];
+  const strongestCriterion = Object.entries(selected.criteria).sort(([, a], [, b]) => b - a)[0];
+  return {
+    methodology: "weighted multi-criteria matrix: evidence alignment×0.40 + risk control×0.35 + feasibility×0.25",
+    criteria_weights,
+    options,
+    selected_option: selected.id,
+    selected_score: selected.weighted_score,
+    selection_reason: `เลือก ${selected.label} เพราะ weighted score ${selected.weighted_score.toFixed(3)} สูงสุด โดย ${strongestCriterion[0]}=${strongestCriterion[1].toFixed(3)}; critique=${critiqueScore.toFixed(3)}, evidence=${evidenceScore.toFixed(3)}`,
+  };
+}
+
+export function buildLogicalVerification(state: PCAState, responseText: string): LogicalVerification {
+  const checks: VerificationCheck[] = [];
+  const citedIds = state.evidence_report.items
+    .map((item) => item.id)
+    .filter((id) => responseText.includes(`[หลักฐาน: ${id}]`));
+  const groundedCitations = citedIds.filter((id) => {
+    const item = state.evidence_report.items.find((candidate) => candidate.id === id);
+    return item ? overlapScore(item.text, responseText) >= 0.15 : false;
+  });
+  const groundingScore = citedIds.length === 0
+    ? 0
+    : groundedCitations.length / citedIds.length;
+  checks.push({
+    criterion: "evidence_grounding",
+    rule: "ทุก evidence citation ต้องมี token ที่สอดคล้องกับเนื้อหาหลักฐาน",
+    passed: state.evidence_report.items.length === 0 || groundingScore >= 0.6,
+    evidence: `${groundedCitations.length}/${citedIds.length} citations มี token overlap กับ evidence`,
+    score: Number(clamp01(groundingScore).toFixed(3)),
+  });
+
+  const selected = state.decision_matrix.options.find(
+    (option) => option.id === state.decision_matrix.selected_option
+  );
+  const decisionAligned = Boolean(
+    selected &&
+    (responseText.includes(selected.id) || responseText.includes(selected.label))
+  );
+  checks.push({
+    criterion: "decision_alignment",
+    rule: "ข้อสรุปต้องอ้างถึงทางเลือกที่ Decision Matrix เลือก",
+    passed: decisionAligned,
+    evidence: decisionAligned
+      ? `พบ selected option: ${selected?.label}`
+      : `ไม่พบ selected option: ${selected?.label ?? state.decision_matrix.selected_option}`,
+    score: decisionAligned ? 1 : 0,
+  });
+
+  const hasConclusion = /ข้อสรุป|สรุป|decision summary|strategic conclusion/i.test(responseText);
+  const hasFactAndAssumption = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText) &&
+    /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
+  const conclusionConsistent = hasConclusion && hasFactAndAssumption &&
+    !(/\[ข้อเท็จจริง\][\s\S]{0,180}(?:อาจ|น่าจะ|คาดว่า)/i.test(responseText));
+  checks.push({
+    criterion: "fact_conclusion_consistency",
+    rule: "ข้อเท็จจริงต้องไม่ถูกเขียนเป็นสมมติฐาน และต้องมีข้อสรุปที่แยกจาก facts",
+    passed: conclusionConsistent,
+    evidence: conclusionConsistent
+      ? "พบ facts/assumptions แยกกันและมีข้อสรุป"
+      : "ไม่พบโครงสร้าง facts → reasoning → conclusion ที่สอดคล้อง",
+    score: conclusionConsistent ? 1 : 0,
+  });
+
+  const score = checks.reduce((sum, check) => sum + check.score, 0) / checks.length;
+  return {
+    status: checks.every((check) => check.passed) ? "ผ่าน" : "ต้องตรวจสอบ",
+    checks,
+    score: Number(score.toFixed(3)),
+  };
+}
+
+function buildDataflow(state: PCAState): DataflowEdge[] {
+  const edge = (
+    id: string,
+    from: string,
+    to: string,
+    outputs: string[],
+    inputs: string[],
+    transformation: string,
+    item_count: number
+  ): DataflowEdge => ({ id, from, to, outputs, inputs, transformation, item_count });
+  return [
+    edge("flow-observation-understanding", "Observation", "Understanding",
+      ["user_input", "language", "unique_token_count"], ["language", "intent_features", "context_features"],
+      "tokenize + language detection + feature extraction", state.observations.length),
+    edge("flow-understanding-purpose", "Understanding", "Purpose",
+      ["understanding", "selected_intent"], ["purpose", "constraints"],
+      "intent classification becomes analysis goal and constraints", 1),
+    edge("flow-purpose-memory", "Purpose", "Memory Retrieval",
+      ["purpose", "user_input"], ["query_tokens", "retrieval_threshold"],
+      "purpose constrains retrieval query; lexical matcher ranks candidates", state.memory_retrieval.candidate_count),
+    edge("flow-memory-evidence", "Memory Retrieval", "Evidence Evaluation",
+      ["memory_hits", "retrieval_scores"], ["memory_evidence", "source_quality"],
+      "retrieved hits become scored evidence items", state.memory_retrieval.matched_count),
+    edge("flow-hypothesis-evidence", "Hypothesis", "Evidence Evaluation",
+      ["hypotheses"], ["assumption_context"], "hypotheses define interpretation boundaries", state.hypotheses.length),
+    edge("flow-evidence-critique", "Evidence Evaluation", "Critique",
+      ["evidence_report", "aggregate_score"], ["missing_signals", "uncertainty"],
+      "evidence coverage and consistency produce critique signals", state.evidence_report.items.length),
+    edge("flow-critique-decision", "Critique", "Decision",
+      ["critique_score", "missing_info", "conflicts"], ["risk_penalties", "matrix_constraints"],
+      "critique adjusts risk-control and feasibility criteria", state.conflict_findings.length + state.missing_info.length),
+    edge("flow-evidence-decision", "Evidence Evaluation", "Decision",
+      ["evidence_items", "evidence_score"], ["criterion_scores", "evidence_ids"],
+      "evidence items support option scoring and citation", state.evidence_report.items.length),
+    edge("flow-decision-communication", "Decision", "Communication",
+      ["decision_matrix", "selected_option"], ["prompt_constraints", "allowed_citations"],
+      "matrix and selected option become generation constraints", state.decision_matrix.options.length),
+    edge("flow-communication-verification", "Communication", "Verification",
+      ["response", "evidence_citations"], ["logical_checks", "grounding_checks"],
+      "response citations and conclusion are tested against source evidence", 1),
+    edge("flow-verification-reflection", "Verification", "Reflection",
+      ["verification_score", "logical_verification"], ["confidence_update", "reflection_state"],
+      "verification result recalculates confidence and reflection", state.verification.detailed_checks.length),
+  ];
+}
+
+function finalizeRuntimeMetrics(state: PCAState): void {
+  const traceStageByModule: Record<string, string> = {
+    Observation: "OBSERVATION",
+    Understanding: "UNDERSTANDING",
+    "Memory Retrieval": "MEMORY",
+    "Evidence Evaluation": "EVIDENCE_EVALUATION",
+    Critique: "CRITIQUE",
+    Decision: "DECISION",
+    Verification: "VERIFICATION_RESULT",
+  };
+  const outputCountByModule: Record<string, number> = {
+    Observation: state.observations.length,
+    Understanding: state.understanding ? 1 : 0,
+    "Memory Retrieval": state.memory_retrieval.matched_count,
+    "Evidence Evaluation": state.evidence_report.items.length,
+    Critique: state.critique.length,
+    Decision: state.decision_matrix.options.length,
+    Verification: state.verification.detailed_checks.length + state.logical_verification.checks.length,
+  };
+  state.runtime_metrics = state.module_audit.map((audit) => {
+    const trace = state.trace.find((entry) => entry.stage === traceStageByModule[audit.module]);
+    const metrics: ModuleRuntimeMetric = {
+      module: audit.module,
+      duration_ms: Number((trace?.duration_ms ?? 0).toFixed(3)),
+      input_count: audit.input_count,
+      output_count: outputCountByModule[audit.module] ?? audit.findings.length,
+      evidence_count: state.evidence_report.items.length,
+      hypothesis_count: state.hypotheses.length,
+      memory_hits: state.memory_retrieval.matched_count,
+      missing_info_count: state.missing_info.length,
+      conflict_count: state.conflict_findings.length,
+    };
+    audit.metrics = metrics;
+    return metrics;
   });
 }
 
@@ -1068,15 +1390,16 @@ function stageDecision(
   state.conflict_findings = conflictFindings;
   const evidenceScore = state.evidence_report.aggregate_score;
   const critiqueScore = state.module_audit.find((audit) => audit.module === "Critique")?.score ?? 0;
+  state.decision_matrix = buildDecisionMatrix(state, critiqueScore);
   const aggregationScore = Number(
-    (evidenceScore * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
+    (state.decision_matrix.selected_score * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
   );
   state.confidence_report = buildConfidenceReport(state, 0);
   state.confidence = state.confidence_report.band;
   state.module_audit.push({
     module: "Decision",
-    algorithm: "weighted aggregation: evidence×0.60 + critique×0.40 − conflicts×0.10",
-    input_count: state.evidence_report.items.length + conflictFindings.length,
+    algorithm: state.decision_matrix.methodology,
+    input_count: state.evidence_report.items.length + conflictFindings.length + state.decision_matrix.options.length,
     score: Math.max(0, aggregationScore),
     findings: [
       `evidence score ${evidenceScore}`,
@@ -1088,6 +1411,19 @@ function stageDecision(
       critique_weight: 0.4,
       conflict_penalty_per_finding: 0.1,
       aggregation_score: Math.max(0, aggregationScore),
+      selected_option: state.decision_matrix.selected_option,
+      selected_score: state.decision_matrix.selected_score,
+    },
+    metrics: {
+      module: "Decision",
+      duration_ms: 0,
+      input_count: state.evidence_report.items.length + conflictFindings.length,
+      output_count: state.decision_matrix.options.length,
+      evidence_count: state.evidence_report.items.length,
+      hypothesis_count: state.hypotheses.length,
+      memory_hits: state.memories.length,
+      missing_info_count: state.missing_info.length,
+      conflict_count: conflictFindings.length,
     },
   });
 
@@ -1096,6 +1432,7 @@ function stageDecision(
     confidence: state.confidence,
     confidence_report: state.confidence_report,
     aggregation_score: Math.max(0, aggregationScore),
+    decision_matrix: state.decision_matrix,
     conflicts,
     context_richness: context.richness,
   });
@@ -1198,6 +1535,10 @@ ${state.evidence_report.items.map((item) =>
 - aggregation score: ${state.module_audit.find((audit) => audit.module === "Decision")?.score?.toFixed(3) ?? "0.000"}
 - evidence aggregate: ${state.evidence_report.aggregate_score.toFixed(3)}
 - missing information: ${state.missing_info.length > 0 ? state.missing_info.join("; ") : "ไม่พบ"}
+- selected option: ${state.decision_matrix.selected_option} — ${state.decision_matrix.options.find((option) => option.id === state.decision_matrix.selected_option)?.label ?? "ไม่ระบุ"}
+- decision matrix reason: ${state.decision_matrix.selection_reason}
+- alternatives: ${state.decision_matrix.options.map((option) => `${option.id}=${option.label} (${option.weighted_score.toFixed(3)})`).join("; ")}
+- ต้องกล่าวถึง selected option หรือ label ของทางเลือกที่เลือกในข้อสรุป และอธิบาย trade-off กับทางเลือกอื่น
 - confidence ต้องไม่เกินระดับที่หลักฐานรองรับ และผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`;
 
   const conflictSection = state.conflict_findings.length > 0
@@ -1305,7 +1646,7 @@ router.post("/", async (req, res) => {
     tone = "Formal Architect",
     deepReasoning = false,
     personalContext = "",
-    memories = [],
+    memories: requestedMemories,
     history = [],
   } = req.body as AnalyzeRequest;
 
@@ -1353,6 +1694,31 @@ router.post("/", async (req, res) => {
       verification_score: 0,
     },
     module_audit: [],
+    runtime_metrics: [],
+    dataflow: [],
+    memory_retrieval: {
+      query: question.trim(),
+      query_tokens: [],
+      algorithm: "",
+      threshold: MEMORY_RELEVANCE_THRESHOLD,
+      candidate_count: 0,
+      matched_count: 0,
+      hits: [],
+      miss_reason: "ยังไม่เริ่ม memory retrieval",
+    },
+    decision_matrix: {
+      methodology: "",
+      criteria_weights: {},
+      options: [],
+      selected_option: "",
+      selected_score: 0,
+      selection_reason: "",
+    },
+    logical_verification: {
+      status: "ต้องตรวจสอบ",
+      checks: [],
+      score: 0,
+    },
     runtime_lifecycle: [],
     governance: {
       status: "ผ่าน",
@@ -1383,6 +1749,16 @@ router.post("/", async (req, res) => {
   };
 
   try {
+    const persistentMemories = loadMemory().map((memory) => ({
+      content: memory.content,
+      layer: memory.layer,
+      source: memory.source,
+      confidence: memory.confidence,
+    }));
+    const suppliedMemories = requestedMemories ?? [];
+    const memoryCandidates = [...persistentMemories, ...suppliedMemories].filter((memory, index, all) =>
+      all.findIndex((candidate) => candidate.content === memory.content) === index
+    );
     recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0, undefined, undefined, false);
     recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0, undefined, undefined, false);
 
@@ -1415,7 +1791,7 @@ router.post("/", async (req, res) => {
     const planStartedAt = new Date().toISOString();
     const planStart = monotonicMs();
     timed(state, () => stagePurpose(state));
-    timed(state, () => stageMemoryRetrieval(state, memories));
+    timed(state, () => stageMemoryRetrieval(state, memoryCandidates));
     timed(state, () => stageMentalModel(state));
     recordRuntime(
       state,
@@ -1431,7 +1807,7 @@ router.post("/", async (req, res) => {
     timed(state, () => stageHypotheses(state));
     timed(state, () => stageEvidenceEvaluation(state, history));
     timed(state, () => stageCritique(state, context, conflictFindings));
-    timed(state, () => stageDecision(state, history, memories, context, conflicts, conflictFindings));
+    timed(state, () => stageDecision(state, history, memoryCandidates, context, conflicts, conflictFindings));
     recordRuntime(
       state,
       "REASON",
@@ -1479,12 +1855,16 @@ router.post("/", async (req, res) => {
     let completion = await requestCompletion();
     let responseText = completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
     let initialVerification = buildVerificationReport(state, responseText);
+    let initialLogicalVerification = buildLogicalVerification(state, responseText);
     let retryCount = 0;
-    if (initialVerification.status !== "ผ่าน") {
+    if (initialVerification.status !== "ผ่าน" || initialLogicalVerification.status !== "ผ่าน") {
       retryCount = 1;
       const failedChecks = initialVerification.detailed_checks
         .filter((check) => !check.passed)
         .map((check) => `${check.criterion}: ${check.rule}`)
+        .concat(initialLogicalVerification.checks
+          .filter((check) => !check.passed)
+          .map((check) => `${check.criterion}: ${check.rule}`))
         .join("; ");
       completion = await requestCompletion(failedChecks);
       responseText = completion.choices[0]?.message?.content ?? responseText;
@@ -1518,6 +1898,29 @@ router.post("/", async (req, res) => {
     timed(state, () => stageReflection(state));
     timed(state, () => stageLearning(state));
     state.verification = buildVerificationReport(state, responseText);
+    state.logical_verification = buildLogicalVerification(state, responseText);
+    state.verification.detailed_checks = [
+      ...state.verification.detailed_checks,
+      ...state.logical_verification.checks,
+    ];
+    state.verification.checks = [
+      ...state.verification.checks,
+      ...state.logical_verification.checks.map((check) =>
+        `${check.criterion}: ${check.passed ? "ผ่าน" : "ไม่ผ่าน"} — ${check.evidence}`
+      ),
+    ];
+    state.verification.score = Number((
+      state.verification.detailed_checks.reduce((sum, check) => sum + check.score, 0) /
+      state.verification.detailed_checks.length
+    ).toFixed(3));
+    state.verification.status =
+      state.verification.status === "ผ่าน" && state.logical_verification.status === "ผ่าน"
+        ? "ผ่าน"
+        : "ต้องตรวจสอบ";
+    state.verification.consistency =
+      state.verification.consistency === "สอดคล้อง" && state.logical_verification.status === "ผ่าน"
+        ? "สอดคล้อง"
+        : "ต้องทบทวน";
     state.confidence_report = buildConfidenceReport(state, state.verification.score);
     state.confidence = state.confidence_report.band;
     state.module_audit.push({
@@ -1532,11 +1935,13 @@ router.post("/", async (req, res) => {
         passed_checks: state.verification.detailed_checks.filter((check) => check.passed).length,
         total_checks: state.verification.detailed_checks.length,
         verification_score: state.verification.score,
+        logical_verification_score: state.logical_verification.score,
       },
     });
     record(state, "VERIFICATION_RESULT", {
       score: state.verification.score,
       detailed_checks: state.verification.detailed_checks,
+      logical_verification: state.logical_verification,
       confidence_after_verification: state.confidence_report,
     });
     recordRuntime(state, "VERIFY", "ตรวจสอบการแยกข้อมูล ความสอดคล้อง และ Human Agency", 0, undefined, undefined, false);
@@ -1551,12 +1956,15 @@ router.post("/", async (req, res) => {
 
     state.end_time = new Date().toISOString();
     state.execution_time_ms = Number((monotonicMs() - startMono).toFixed(3));
+    finalizeRuntimeMetrics(state);
+    state.dataflow = buildDataflow(state);
 
     res.json({
       response: state.response,
       pcaState: {
         notes: state.notes,
         observations: state.observations,
+        language: state.language,
         understanding: state.understanding,
         purpose: state.purpose,
         decision: state.decision,
@@ -1567,6 +1975,11 @@ router.post("/", async (req, res) => {
         evidence_report: state.evidence_report,
         confidence_report: state.confidence_report,
         module_audit: state.module_audit,
+        runtime_metrics: state.runtime_metrics,
+        dataflow: state.dataflow,
+        memory_retrieval: state.memory_retrieval,
+        decision_matrix: state.decision_matrix,
+        logical_verification: state.logical_verification,
         critique: state.critique,
         reflection: state.reflection,
         learning: state.learning,

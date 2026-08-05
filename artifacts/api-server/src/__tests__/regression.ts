@@ -15,6 +15,8 @@ import {
   buildEvidenceReport,
   buildConfidenceReport,
   buildVerificationReport,
+  buildDecisionMatrix,
+  buildLogicalVerification,
   buildSystemPrompt,
   type PCAState,
   type ConversationTurn,
@@ -253,6 +255,26 @@ function makeVerificationState(): PCAState {
       verification_score: 0,
     },
     module_audit: [],
+    runtime_metrics: [],
+    dataflow: [],
+    memory_retrieval: {
+      query: "",
+      query_tokens: [],
+      algorithm: "",
+      threshold: 0.25,
+      candidate_count: 0,
+      matched_count: 0,
+      hits: [],
+    },
+    decision_matrix: {
+      methodology: "",
+      criteria_weights: {},
+      options: [],
+      selected_option: "",
+      selected_score: 0,
+      selection_reason: "",
+    },
+    logical_verification: { status: "ต้องตรวจสอบ", checks: [], score: 0 },
     runtime_lifecycle: [],
     governance: {
       status: "ผ่าน",
@@ -333,6 +355,55 @@ describe("buildSystemPrompt — computed controls are injected", () => {
   );
   assert("Prompt includes evidence id", prompt.includes("[หลักฐาน: evidence-input]"));
   assert("Prompt includes decision output", prompt.includes("เสนอทางเลือก"));
+});
+
+describe("buildDecisionMatrix — deterministic alternatives and winner", () => {
+  const state = makeVerificationState();
+  state.evidence_report.aggregate_score = 0.82;
+  state.missing_info = [];
+  state.conflict_findings = [];
+  const matrix = buildDecisionMatrix(state, 0.9);
+  assert("Decision matrix has three alternatives", matrix.options.length === 3);
+  assert("Criteria weights sum to one", Math.abs(
+    Object.values(matrix.criteria_weights).reduce((sum: number, value: number) => sum + value, 0) - 1
+  ) < 0.001);
+  assert("Winner is one of the computed alternatives", matrix.options.some(
+    (option) => option.id === matrix.selected_option && option.weighted_score === matrix.selected_score
+  ));
+  assert("Selection reason exposes causal score", matrix.selection_reason.includes("weighted score"));
+});
+
+describe("buildLogicalVerification — grounding and decision alignment", () => {
+  const state = makeVerificationState();
+  state.decision_matrix = {
+    methodology: "test",
+    criteria_weights: { evidence_alignment: 1 },
+    options: [{
+      id: "option-phased",
+      label: "ดำเนินการเป็นระยะ",
+      rationale: "ลดความเสี่ยง",
+      criteria: { evidence_alignment: 0.8 },
+      weighted_score: 0.8,
+      evidence_ids: ["evidence-input"],
+    }],
+    selected_option: "option-phased",
+    selected_score: 0.8,
+    selection_reason: "test",
+  };
+  const result = buildLogicalVerification(
+    state,
+    "[ข้อเท็จจริง]\nข้อมูลจากผู้ใช้ [หลักฐาน: evidence-input]\n" +
+      "[สมมติฐาน]\nอาจมีข้อมูลที่ขาด\nข้อสรุป: ดำเนินการเป็นระยะ\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
+  );
+  assert("Grounded evidence passes logical verification", result.checks.find(
+    (check) => check.criterion === "evidence_grounding"
+  )?.passed === true);
+  assert("Selected decision is aligned", result.checks.find(
+    (check) => check.criterion === "decision_alignment"
+  )?.passed === true);
+  assert("Logical verification is not keyword-only", result.checks.some(
+    (check) => check.criterion === "fact_conclusion_consistency"
+  ));
 });
 
 // ─── 2. buildWorkingMemory ────────────────────────────────────────────────────

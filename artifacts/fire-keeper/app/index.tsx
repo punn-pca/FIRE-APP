@@ -81,6 +81,20 @@ export default function ChatScreen() {
           .slice(-10)
           .map((m) => ({ role: m.role, content: m.content }));
 
+        // Long-term memory is persisted by the API server and is part of
+        // retrieval input, rather than an empty client-side placeholder.
+        const memoryResponse = await fetch(`${API_BASE}/api/memory`);
+        const memoryPayload = memoryResponse.ok
+          ? await memoryResponse.json() as {
+              items?: Array<{
+                content: string;
+                layer: string;
+                source: string;
+                confidence: number;
+              }>;
+            }
+          : { items: [] };
+
         const response = await fetch(`${API_BASE}/api/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -89,7 +103,12 @@ export default function ChatScreen() {
             tone,
             deepReasoning,
             personalContext: '',
-            memories: [],
+            memories: (memoryPayload.items ?? []).map((memory) => ({
+              content: memory.content,
+              layer: memory.layer,
+              source: memory.source,
+              confidence: memory.confidence,
+            })),
             history,
           }),
         });

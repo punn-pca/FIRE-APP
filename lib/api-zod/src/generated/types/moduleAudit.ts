@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ModuleAuditCalculations } from './moduleAuditCalculations';
+import type { ModuleRuntimeMetric } from './moduleRuntimeMetric';
 
 export interface ModuleAudit {
   module: string;
@@ -14,4 +15,5 @@ export interface ModuleAudit {
   score?: number;
   findings: string[];
   calculations: ModuleAuditCalculations;
+  metrics?: ModuleRuntimeMetric;
 }

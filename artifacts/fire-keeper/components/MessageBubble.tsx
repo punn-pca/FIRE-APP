@@ -101,6 +101,72 @@ export interface ModuleAudit {
   score?: number;
   findings: string[];
   calculations: Record<string, number | string | boolean>;
+  metrics?: ModuleRuntimeMetric;
+}
+
+export interface ModuleRuntimeMetric {
+  module: string;
+  duration_ms: number;
+  input_count: number;
+  output_count: number;
+  evidence_count: number;
+  hypothesis_count: number;
+  memory_hits: number;
+  missing_info_count: number;
+  conflict_count: number;
+}
+
+export interface DataflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  outputs: string[];
+  inputs: string[];
+  transformation: string;
+  item_count: number;
+}
+
+export interface MemoryHit {
+  rank: number;
+  content: string;
+  source: string;
+  retrieval_score: number;
+  matched_tokens: string[];
+}
+
+export interface MemoryRetrievalReport {
+  query: string;
+  query_tokens: string[];
+  algorithm: string;
+  threshold: number;
+  candidate_count: number;
+  matched_count: number;
+  hits: MemoryHit[];
+  miss_reason?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  rationale: string;
+  criteria: Record<string, number>;
+  weighted_score: number;
+  evidence_ids: string[];
+}
+
+export interface DecisionMatrix {
+  methodology: string;
+  criteria_weights: Record<string, number>;
+  options: DecisionOption[];
+  selected_option: string;
+  selected_score: number;
+  selection_reason: string;
+}
+
+export interface LogicalVerification {
+  status: 'ผ่าน' | 'ต้องตรวจสอบ';
+  checks: VerificationCheck[];
+  score: number;
 }
 
 export interface KnowledgeMap {
@@ -123,6 +189,11 @@ export interface PCAState {
   evidence_report?: EvidenceReport;
   confidence_report?: ConfidenceReport;
   module_audit?: ModuleAudit[];
+  runtime_metrics?: ModuleRuntimeMetric[];
+  dataflow?: DataflowEdge[];
+  memory_retrieval?: MemoryRetrievalReport;
+  decision_matrix?: DecisionMatrix;
+  logical_verification?: LogicalVerification;
   runtime_lifecycle?: RuntimeEvent[];
   governance?: GovernanceReport;
   verification?: VerificationReport;
@@ -230,6 +301,47 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
       <td>${audit.score != null ? audit.score.toFixed(3) : '—'}</td>
       <td>${audit.findings.map((finding) => escHtml(finding)).join('<br>')}</td>
     </tr>`).join('');
+  const dataflowRows = (pca.dataflow ?? []).map((flow) => `
+    <tr>
+      <td><strong>${escHtml(flow.from)}</strong></td>
+      <td>→</td>
+      <td><strong>${escHtml(flow.to)}</strong></td>
+      <td>${escHtml(flow.outputs.join(', '))}</td>
+      <td>${escHtml(flow.inputs.join(', '))}</td>
+      <td>${escHtml(flow.transformation)}</td>
+      <td>${flow.item_count}</td>
+    </tr>`).join('');
+  const decisionRows = (pca.decision_matrix?.options ?? []).map((option) => `
+    <tr>
+      <td><strong>${escHtml(option.label)}</strong><br><span class="detail">${escHtml(option.id)}</span></td>
+      <td>${Object.entries(option.criteria).map(([key, value]) => `${escHtml(key)} ${(value as number).toFixed(3)}`).join('<br>')}</td>
+      <td><strong>${option.weighted_score.toFixed(3)}</strong></td>
+      <td>${escHtml(option.rationale)}</td>
+      <td>${option.evidence_ids.map((id) => escHtml(id)).join(', ') || '—'}</td>
+    </tr>`).join('');
+  const memoryRows = (pca.memory_retrieval?.hits ?? []).map((hit) => `
+    <tr>
+      <td>${hit.rank}</td>
+      <td>${escHtml(hit.source)}</td>
+      <td>${escHtml(hit.content)}</td>
+      <td>${hit.retrieval_score.toFixed(3)}</td>
+      <td>${hit.matched_tokens.map((token) => escHtml(token)).join(', ') || '—'}</td>
+    </tr>`).join('');
+  const metricRows = (pca.runtime_metrics ?? []).map((metric) => `
+    <tr>
+      <td><strong>${escHtml(metric.module)}</strong></td>
+      <td>${metric.duration_ms.toFixed(3)} ms</td>
+      <td>${metric.input_count}</td>
+      <td>${metric.output_count}</td>
+      <td>${metric.evidence_count}</td>
+      <td>${metric.hypothesis_count}</td>
+      <td>${metric.memory_hits}</td>
+      <td>${metric.missing_info_count}</td>
+      <td>${metric.conflict_count}</td>
+    </tr>`).join('');
+  const logicalVerificationItems = (pca.logical_verification?.checks ?? []).map((check) =>
+    `<li><strong>${escHtml(check.criterion)}</strong> — ${check.passed ? 'ผ่าน' : 'ไม่ผ่าน'} (${check.score.toFixed(2)})<br><span class="detail">${escHtml(check.rule)}<br>${escHtml(check.evidence)}</span></li>`
+  ).join('');
   const factItems = (pca.knowledge_map?.facts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const assumptionItems = (pca.knowledge_map?.assumptions ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const unknownItems = (pca.knowledge_map?.unknowns ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
@@ -424,6 +536,61 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
     <thead><tr><th>แหล่ง</th><th>ข้อความ</th><th>relevance</th><th>quality</th><th>consistency</th><th>composite</th></tr></thead>
     <tbody>${evidenceRows || '<tr><td colspan="6">ไม่มี evidence item</td></tr>'}</tbody>
   </table>
+</div>
+
+<!-- COGNITIVE DATAFLOW -->
+<div class="section page-break">
+  <div class="sec-title">🔗 Cognitive Dataflow — output → input lineage</div>
+  <table class="audit-table">
+    <thead><tr><th>จาก</th><th></th><th>ถึง</th><th>outputs</th><th>inputs</th><th>transformation</th><th>items</th></tr></thead>
+    <tbody>${dataflowRows || '<tr><td colspan="7">ไม่มี dataflow</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- DECISION MATRIX -->
+<div class="section">
+  <div class="sec-title">⚡ Decision Matrix — alternatives, criteria & trade-offs</div>
+  <div class="score-box">
+    <span class="score-chip">selected: ${escHtml(pca.decision_matrix?.selected_option ?? '—')}</span>
+    <span class="score-chip">score: ${(pca.decision_matrix?.selected_score ?? 0).toFixed(3)}</span>
+  </div>
+  <div class="detail">${escHtml(pca.decision_matrix?.selection_reason ?? 'ไม่มี decision matrix')}</div>
+  <table class="audit-table">
+    <thead><tr><th>ทางเลือก</th><th>criteria scores</th><th>weighted</th><th>rationale / trade-off</th><th>evidence IDs</th></tr></thead>
+    <tbody>${decisionRows || '<tr><td colspan="5">ไม่มีทางเลือก</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- MEMORY RETRIEVAL -->
+<div class="section">
+  <div class="sec-title">💾 Memory Retrieval — query, candidates, hits & misses</div>
+  <div class="score-box">
+    <span class="score-chip">candidates: ${pca.memory_retrieval?.candidate_count ?? 0}</span>
+    <span class="score-chip">hits: ${pca.memory_retrieval?.matched_count ?? 0}</span>
+    <span class="score-chip">threshold: ${(pca.memory_retrieval?.threshold ?? 0).toFixed(3)}</span>
+  </div>
+  <div class="question-box">${escHtml(pca.memory_retrieval?.query ?? 'ไม่มี query')}</div>
+  ${pca.memory_retrieval?.miss_reason ? `<div class="detail">miss reason: ${escHtml(pca.memory_retrieval.miss_reason)}</div>` : ''}
+  <table class="evidence-table">
+    <thead><tr><th>#</th><th>source</th><th>content</th><th>score</th><th>matched tokens</th></tr></thead>
+    <tbody>${memoryRows || '<tr><td colspan="5">ไม่พบ memory hit</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- MEANINGFUL RUNTIME METRICS -->
+<div class="section">
+  <div class="sec-title">📊 Cognitive Operation Metrics — runtime แยกจาก phase timing</div>
+  <table class="audit-table">
+    <thead><tr><th>โมดูล</th><th>runtime</th><th>input</th><th>output</th><th>evidence</th><th>hypotheses</th><th>memory hits</th><th>missing</th><th>conflicts</th></tr></thead>
+    <tbody>${metricRows || '<tr><td colspan="9">ไม่มี metrics</td></tr>'}</tbody>
+  </table>
+</div>
+
+<!-- LOGICAL VERIFICATION -->
+<div class="section">
+  <div class="sec-title">🧠 Logical Verification</div>
+  <div class="status-line">สถานะ: <span class="cbadge ${pca.logical_verification?.status === 'ผ่าน' ? 'conf-high' : 'conf-mid'}">${escHtml(pca.logical_verification?.status ?? 'ต้องตรวจสอบ')}</span> · score ${((pca.logical_verification?.score ?? 0) * 100).toFixed(1)}%</div>
+  <ul class="ul-items">${logicalVerificationItems || '<li>ไม่มี logical checks</li>'}</ul>
 </div>
 
 <div class="section">
@@ -822,6 +989,62 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   ))}
                 </View>
               )}
+              {message.pcaState.dataflow && message.pcaState.dataflow.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>🔗 Cognitive Dataflow: {message.pcaState.dataflow.length} edges</Text>
+                  {message.pcaState.dataflow.slice(0, 8).map((flow) => (
+                    <Text key={flow.id} style={styles.osCardText} numberOfLines={3}>
+                      {flow.from} → {flow.to} · {flow.item_count} items{'\n'}
+                      output [{flow.outputs.join(', ')}] → input [{flow.inputs.join(', ')}]
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.decision_matrix && message.pcaState.decision_matrix.options.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    ⚡ Decision Matrix · selected {message.pcaState.decision_matrix.selected_option}
+                  </Text>
+                  <Text style={styles.osCardText} numberOfLines={3}>
+                    {message.pcaState.decision_matrix.selection_reason}
+                  </Text>
+                  {message.pcaState.decision_matrix.options.map((option) => (
+                    <Text key={option.id} style={styles.osCardText} numberOfLines={2}>
+                      {option.id === message.pcaState?.decision_matrix?.selected_option ? '✓' : '•'} {option.label}: {option.weighted_score.toFixed(3)}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.memory_retrieval && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    💾 Memory Retrieval · {message.pcaState.memory_retrieval.matched_count}/{message.pcaState.memory_retrieval.candidate_count} hits
+                  </Text>
+                  <Text style={styles.osCardText} numberOfLines={2}>
+                    query tokens: {message.pcaState.memory_retrieval.query_tokens.slice(0, 12).join(', ') || 'ไม่มี token'}
+                  </Text>
+                  {message.pcaState.memory_retrieval.hits.slice(0, 3).map((hit) => (
+                    <Text key={`${hit.rank}-${hit.source}`} style={styles.osCardText} numberOfLines={2}>
+                      #{hit.rank} {hit.source} · {hit.retrieval_score.toFixed(3)} · {hit.matched_tokens.join(', ') || 'ไม่มี token ที่ match'}
+                    </Text>
+                  ))}
+                  {message.pcaState.memory_retrieval.miss_reason && (
+                    <Text style={styles.osCardText} numberOfLines={2}>
+                      miss: {message.pcaState.memory_retrieval.miss_reason}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {message.pcaState.runtime_metrics && message.pcaState.runtime_metrics.length > 0 && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>📊 Cognitive Operation Metrics</Text>
+                  {message.pcaState.runtime_metrics.map((metric) => (
+                    <Text key={metric.module} style={styles.osCardText} numberOfLines={2}>
+                      • {metric.module}: {metric.input_count} in → {metric.output_count} out · evidence {metric.evidence_count} · memory {metric.memory_hits} · conflicts {metric.conflict_count}
+                    </Text>
+                  ))}
+                </View>
+              )}
               {/* Per-stage timing mini-list */}
               {message.pcaState.trace.map((entry, i) => {
                 const info = STAGE_INFO[entry.stage];
@@ -881,6 +1104,21 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                     คะแนน: {((message.pcaState.verification.score ?? 0) * 100).toFixed(1)}%
                   </Text>
                   {(message.pcaState.verification.detailed_checks ?? []).map((check) => (
+                    <Text key={check.criterion} style={styles.osCardText} numberOfLines={2}>
+                      {check.passed ? '✓' : '✗'} {check.criterion}: {check.evidence}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.logical_verification && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>
+                    🧠 Logical Verification: {message.pcaState.logical_verification.status}
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    score: {(message.pcaState.logical_verification.score * 100).toFixed(1)}%
+                  </Text>
+                  {message.pcaState.logical_verification.checks.map((check) => (
                     <Text key={check.criterion} style={styles.osCardText} numberOfLines={2}>
                       {check.passed ? '✓' : '✗'} {check.criterion}: {check.evidence}
                     </Text>

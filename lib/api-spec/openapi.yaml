@@ -159,7 +159,81 @@ components:
         calculations:
           type: object
           additionalProperties: {}
+        metrics:
+          $ref: "#/components/schemas/ModuleRuntimeMetric"
       required: [module, algorithm, input_count, findings, calculations]
+    ModuleRuntimeMetric:
+      type: object
+      properties:
+        module: { type: string }
+        duration_ms: { type: number }
+        input_count: { type: number }
+        output_count: { type: number }
+        evidence_count: { type: number }
+        hypothesis_count: { type: number }
+        memory_hits: { type: number }
+        missing_info_count: { type: number }
+        conflict_count: { type: number }
+      required: [module, duration_ms, input_count, output_count, evidence_count, hypothesis_count, memory_hits, missing_info_count, conflict_count]
+    DataflowEdge:
+      type: object
+      properties:
+        id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        outputs: { type: array, items: { type: string } }
+        inputs: { type: array, items: { type: string } }
+        transformation: { type: string }
+        item_count: { type: number }
+      required: [id, from, to, outputs, inputs, transformation, item_count]
+    MemoryHit:
+      type: object
+      properties:
+        rank: { type: number }
+        content: { type: string }
+        source: { type: string }
+        retrieval_score: { type: number }
+        matched_tokens: { type: array, items: { type: string } }
+      required: [rank, content, source, retrieval_score, matched_tokens]
+    MemoryRetrievalReport:
+      type: object
+      properties:
+        query: { type: string }
+        query_tokens: { type: array, items: { type: string } }
+        algorithm: { type: string }
+        threshold: { type: number }
+        candidate_count: { type: number }
+        matched_count: { type: number }
+        hits: { type: array, items: { $ref: "#/components/schemas/MemoryHit" } }
+        miss_reason: { type: string }
+      required: [query, query_tokens, algorithm, threshold, candidate_count, matched_count, hits]
+    DecisionOption:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        rationale: { type: string }
+        criteria: { type: object, additionalProperties: { type: number } }
+        weighted_score: { type: number }
+        evidence_ids: { type: array, items: { type: string } }
+      required: [id, label, rationale, criteria, weighted_score, evidence_ids]
+    DecisionMatrix:
+      type: object
+      properties:
+        methodology: { type: string }
+        criteria_weights: { type: object, additionalProperties: { type: number } }
+        options: { type: array, items: { $ref: "#/components/schemas/DecisionOption" } }
+        selected_option: { type: string }
+        selected_score: { type: number }
+        selection_reason: { type: string }
+      required: [methodology, criteria_weights, options, selected_option, selected_score, selection_reason]
+    LogicalVerification:
+      type: object
+      properties:
+        status: { type: string, enum: [ผ่าน, ต้องตรวจสอบ] }
+        checks: { type: array, items: { $ref: "#/components/schemas/VerificationCheck" } }
+        score: { type: number }
+      required: [status, checks, score]
     PCAState:
       type: object
       properties:
@@ -177,12 +251,21 @@ components:
         module_audit:
           type: array
           items: { $ref: "#/components/schemas/ModuleAudit" }
+        runtime_metrics:
+          type: array
+          items: { $ref: "#/components/schemas/ModuleRuntimeMetric" }
+        dataflow:
+          type: array
+          items: { $ref: "#/components/schemas/DataflowEdge" }
+        memory_retrieval: { $ref: "#/components/schemas/MemoryRetrievalReport" }
+        decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
+        logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
         verification: { $ref: "#/components/schemas/VerificationReport" }
         runtime_lifecycle: { type: array, items: { type: object, additionalProperties: true } }
         governance: { type: object, additionalProperties: true }
         knowledge_map: { type: object, additionalProperties: true }
         trace: { type: array, items: { type: object, additionalProperties: true } }
-      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, verification]
+      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, verification]
     AnalyzeResponse:
       type: object
       properties:

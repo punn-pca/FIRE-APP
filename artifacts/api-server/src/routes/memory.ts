@@ -5,7 +5,7 @@ import { logger } from "../lib/logger";
 
 const router: Router = Router();
 
-interface MemoryItem {
+export interface MemoryItem {
   id: string;
   content: string;
   layer: "project" | "reflective" | "episodic" | "semantic";
@@ -17,7 +17,7 @@ interface MemoryItem {
 // File-based persistent memory
 const MEMORY_FILE = path.join(process.cwd(), "memory_store.json");
 
-function loadMemory(): MemoryItem[] {
+export function loadMemory(): MemoryItem[] {
   try {
     if (fs.existsSync(MEMORY_FILE)) {
       const raw = fs.readFileSync(MEMORY_FILE, "utf-8");

@@ -26,3 +26,9 @@ Generated API clients are part of the runtime contract, not only type artifacts:
 **Why:** A stale duplicate Expo process held the managed port during contract regeneration and masked a valid generated client as a runtime import failure.
 
 **How to apply:** Run codegen before client checks, confirm generated files exist, restart the exact managed mobile workflow once, and inspect the new bundle logs before declaring the client broken.
+
+The cognitive trace should represent causal dataflow, not only a chronological timeline: each edge names the producing module's outputs, consuming module's inputs, transformation, and item count; decision output must include a weighted alternative matrix; retrieval and verification must expose their diagnostics.
+
+**Why:** A timeline can show that modules ran without showing how state moved or why a selected direction won. Explicit lineage, alternatives, retrieval misses, and logical checks make the trace inspectable as an architecture.
+
+**How to apply:** Preserve the shared trace contract across API, mobile panel, and printable report. Keep phase timing separate from operation metrics, load persisted memory before retrieval, and make evidence/decision/verification outputs generation controls rather than post-hoc annotations.

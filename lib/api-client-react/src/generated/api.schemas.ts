@@ -131,6 +131,18 @@ export interface ConfidenceReport {
 
 export type ModuleAuditCalculations = {[key: string]: unknown};
 
+export interface ModuleRuntimeMetric {
+  module: string;
+  duration_ms: number;
+  input_count: number;
+  output_count: number;
+  evidence_count: number;
+  hypothesis_count: number;
+  memory_hits: number;
+  missing_info_count: number;
+  conflict_count: number;
+}
+
 export interface ModuleAudit {
   module: string;
   algorithm: string;
@@ -138,6 +150,72 @@ export interface ModuleAudit {
   score?: number;
   findings: string[];
   calculations: ModuleAuditCalculations;
+  metrics?: ModuleRuntimeMetric;
+}
+
+export interface DataflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  outputs: string[];
+  inputs: string[];
+  transformation: string;
+  item_count: number;
+}
+
+export interface MemoryHit {
+  rank: number;
+  content: string;
+  source: string;
+  retrieval_score: number;
+  matched_tokens: string[];
+}
+
+export interface MemoryRetrievalReport {
+  query: string;
+  query_tokens: string[];
+  algorithm: string;
+  threshold: number;
+  candidate_count: number;
+  matched_count: number;
+  hits: MemoryHit[];
+  miss_reason?: string;
+}
+
+export type DecisionOptionCriteria = {[key: string]: number};
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  rationale: string;
+  criteria: DecisionOptionCriteria;
+  weighted_score: number;
+  evidence_ids: string[];
+}
+
+export type DecisionMatrixCriteriaWeights = {[key: string]: number};
+
+export interface DecisionMatrix {
+  methodology: string;
+  criteria_weights: DecisionMatrixCriteriaWeights;
+  options: DecisionOption[];
+  selected_option: string;
+  selected_score: number;
+  selection_reason: string;
+}
+
+export type LogicalVerificationStatus = typeof LogicalVerificationStatus[keyof typeof LogicalVerificationStatus];
+
+
+export const LogicalVerificationStatus = {
+  ผ่าน: 'ผ่าน',
+  ต้องตรวจสอบ: 'ต้องตรวจสอบ',
+} as const;
+
+export interface LogicalVerification {
+  status: LogicalVerificationStatus;
+  checks: VerificationCheck[];
+  score: number;
 }
 
 export type PCAStateLanguage = typeof PCAStateLanguage[keyof typeof PCAStateLanguage];
@@ -181,6 +259,11 @@ export interface PCAState {
   evidence_report: EvidenceReport;
   confidence_report: ConfidenceReport;
   module_audit: ModuleAudit[];
+  runtime_metrics: ModuleRuntimeMetric[];
+  dataflow: DataflowEdge[];
+  memory_retrieval: MemoryRetrievalReport;
+  decision_matrix: DecisionMatrix;
+  logical_verification: LogicalVerification;
   verification: VerificationReport;
   runtime_lifecycle?: PCAStateRuntimeLifecycleItem[];
   governance?: PCAStateGovernance;

@@ -6,8 +6,13 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ConfidenceReport } from './confidenceReport';
+import type { DataflowEdge } from './dataflowEdge';
+import type { DecisionMatrix } from './decisionMatrix';
 import type { EvidenceReport } from './evidenceReport';
+import type { LogicalVerification } from './logicalVerification';
+import type { MemoryRetrievalReport } from './memoryRetrievalReport';
 import type { ModuleAudit } from './moduleAudit';
+import type { ModuleRuntimeMetric } from './moduleRuntimeMetric';
 import type { PCAStateConfidence } from './pCAStateConfidence';
 import type { PCAStateConflictFindingsItem } from './pCAStateConflictFindingsItem';
 import type { PCAStateGovernance } from './pCAStateGovernance';
@@ -30,6 +35,11 @@ export interface PCAState {
   evidence_report: EvidenceReport;
   confidence_report: ConfidenceReport;
   module_audit: ModuleAudit[];
+  runtime_metrics: ModuleRuntimeMetric[];
+  dataflow: DataflowEdge[];
+  memory_retrieval: MemoryRetrievalReport;
+  decision_matrix: DecisionMatrix;
+  logical_verification: LogicalVerification;
   verification: VerificationReport;
   runtime_lifecycle?: PCAStateRuntimeLifecycleItem[];
   governance?: PCAStateGovernance;
