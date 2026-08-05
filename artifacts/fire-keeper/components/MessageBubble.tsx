@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   Pressable,
-  Share,
   Platform,
   ToastAndroid,
   Alert,
@@ -12,6 +11,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 
@@ -1019,7 +1019,7 @@ interface MessageBubbleProps {
 
 async function shareAsFile(content: string, filename: string) {
   if (Platform.OS === 'web') {
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([content], { type: mimeTypeForFilename(filename) });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -1034,7 +1034,35 @@ async function shareAsFile(content: string, filename: string) {
   if (!baseDirectory) throw new Error('ไม่พบพื้นที่บันทึกไฟล์ในอุปกรณ์');
   const uri = `${baseDirectory}${filename}`;
   await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
-  await Share.share({ url: uri, message: uri, title: filename });
+  if (!(await Sharing.isAvailableAsync())) {
+    throw new Error('อุปกรณ์นี้ไม่รองรับการแชร์ไฟล์');
+  }
+  await Sharing.shareAsync(uri, {
+    dialogTitle: filename,
+    mimeType: mimeTypeForFilename(filename),
+  });
+}
+
+function mimeTypeForFilename(filename: string): string {
+  if (filename.endsWith('.html')) return 'text/html';
+  if (filename.endsWith('.pdf')) return 'application/pdf';
+  return 'text/plain';
+}
+
+function downloadTextFile(content: string, filename: string, mimeType: string) {
+  if (typeof document === 'undefined' || typeof URL === 'undefined') {
+    throw new Error('ไม่พบระบบดาวน์โหลดไฟล์ของเว็บ');
+  }
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
@@ -1083,23 +1111,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     if (!message.pcaState) return;
     const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
     const html = generateHtmlReport(question, message.content, message.pcaState);
+    const filename = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
 
     if (Platform.OS === 'web') {
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadTextFile(html, filename, 'text/html;charset=utf-8');
     } else {
       try {
-        await shareAsFile(
-          html,
-          `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`
-        );
+        await shareAsFile(html, filename);
       } catch {
         await Clipboard.setStringAsync(html);
         Alert.alert('บันทึกไม่สำเร็จ', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว สามารถวางในไฟล์ .html ได้ครับ');
@@ -1129,7 +1147,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       if (!baseDirectory) throw new Error('ไม่พบพื้นที่บันทึกไฟล์ในอุปกรณ์');
       const destination = `${baseDirectory}${filename}`;
       await FileSystem.copyAsync({ from: pdf.uri, to: destination });
-      await Share.share({ url: destination, message: destination, title: filename });
+      if (!(await Sharing.isAvailableAsync())) {
+        throw new Error('อุปกรณ์นี้ไม่รองรับการแชร์ไฟล์');
+      }
+      await Sharing.shareAsync(destination, {
+        dialogTitle: filename,
+        mimeType: 'application/pdf',
+      });
     } catch {
       Alert.alert('สร้าง PDF ไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง หรือใช้ปุ่ม HTML แล้วเลือกพิมพ์เป็น PDF');
     }
@@ -1191,10 +1215,22 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     }
 
     try {
-      await shareAsFile(content, filename);
+      if (Platform.OS === 'web') {
+        if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+          await navigator.share({ title: 'FIRE KEEPER Analysis', text: content });
+        } else {
+          downloadTextFile(content, filename, 'text/plain;charset=utf-8');
+        }
+      } else {
+        await shareAsFile(content, filename);
+      }
     } catch (err) {
-      // Fallback to basic share
-      await Share.share({ message: content, title: 'FIRE KEEPER Analysis' });
+      try {
+        await Clipboard.setStringAsync(content);
+        Alert.alert('แชร์ไม่สำเร็จ', 'คัดลอกผลวิเคราะห์ไปยังคลิปบอร์ดแล้วครับ');
+      } catch {
+        Alert.alert('แชร์ไม่สำเร็จ', err instanceof Error ? err.message : 'กรุณาลองใหม่อีกครั้ง');
+      }
     }
   }, [message]);
 

@@ -6,7 +6,6 @@ import {
   Text,
   Pressable,
   Platform,
-  Share,
   Alert,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -15,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { fetch } from 'expo/fetch';
 import { useColors } from '@/hooks/useColors';
 import MessageBubble, {
@@ -201,7 +201,7 @@ export default function ChatScreen() {
         document.body.appendChild(anchor);
         anchor.click();
         document.body.removeChild(anchor);
-        URL.revokeObjectURL(url);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
 
@@ -211,7 +211,13 @@ export default function ChatScreen() {
       await FileSystem.writeAsStringAsync(uri, content, {
         encoding: FileSystem.EncodingType.UTF8,
       });
-      await Share.share({ url: uri, message: uri, title: filename });
+      if (!(await Sharing.isAvailableAsync())) {
+        throw new Error('อุปกรณ์นี้ไม่รองรับการแชร์ไฟล์');
+      }
+      await Sharing.shareAsync(uri, {
+        dialogTitle: filename,
+        mimeType: 'text/plain',
+      });
     } catch (_err) {
       await Clipboard.setStringAsync(content);
       Alert.alert('บันทึกไฟล์ไม่สำเร็จ', 'คัดลอกการสนทนาไปยังคลิปบอร์ดแล้วครับ');

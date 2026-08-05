@@ -14,3 +14,9 @@ Reports have real export paths: web downloads `.html`, web PDF uses the browser 
 **Why:** Sharing HTML text or putting report content on the clipboard does not produce a usable file for the user.
 
 **How to apply:** Keep HTML and PDF actions separate in the UI and preserve clipboard fallback only when file creation or sharing fails.
+
+For native file exports, use Expo Sharing's `shareAsync` with the saved file URI; React Native's generic `Share.share` is not a reliable file-share API across devices.
+
+**Why:** Generic sharing can treat a local URI as plain text or silently fail, while Expo Sharing is designed for local file URLs and MIME types.
+
+**How to apply:** Save HTML/PDF/TXT to app storage, share with `shareAsync`, use browser downloads on web, and keep clipboard fallback for unavailable share targets.
