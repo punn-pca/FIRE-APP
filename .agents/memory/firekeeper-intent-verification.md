@@ -19,4 +19,4 @@ User-facing answers must be normalized separately from PCA audit output: non-dec
 
 **Why:** A valid LLM analysis can still be a poor product response when it exposes the full internal report instead of answering the user's question.
 
-**How to apply:** After communication and before final verification, extract the route's answer section or use a direct deterministic fallback; test both content quality and removal of internal PCA headings.
+**How to apply:** Lock the natural-language answer first, then audit it without rewriting or blocking it; remove internal PCA headings and citation placeholders from user-facing text while retaining the full audit in state and exports.

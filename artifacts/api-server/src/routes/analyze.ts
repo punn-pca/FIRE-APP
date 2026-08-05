@@ -1056,23 +1056,32 @@ ${optionText}
 }
 
 export function normalizeUserFacingResponse(state: PCAState, responseText: string): string {
-  if (state.intent.type === "decision") return responseText.trim();
+  const trimmed = responseText.trim();
+  const cleanPlaceholders = (text: string): string => text
+    .replace(/\s*\[หลักฐาน:\s*evidence-id\s*\]/gi, "")
+    .replace(/\s*\[ความขัดแย้ง:\s*conflict-id\s*\]/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  if (!trimmed) return buildVerifiedFallback(state);
 
   const sectionMatch = responseText.match(
-    /(?:^|\n)###\s*(?:#\s*)?3\.\s*[^\n]*(?:คำอธิบาย|สรุป|เปรียบเทียบ|คำตอบ)[^\n]*\n([\s\S]*?)(?=\n###|\n\[DECISION_SUMMARY\]|\s*$)/i
+    /(?:^|\n)###\s*(?:#\s*)?3\.\s*[^\n]*(?:คำอธิบาย|สรุป|เปรียบเทียบ|คำตอบ|ทางเลือก|comparison|answer|explanation|conclusion)[^\n]*\n([\s\S]*?)(?=\n###|\n\[DECISION_SUMMARY\]|\s*$)/i
   );
   const summaryMatch = responseText.match(/\[DECISION_SUMMARY\]:\s*([\s\S]*)/i);
   const extracted = (sectionMatch?.[1] ?? summaryMatch?.[1] ?? "").trim();
+  const hasInternalReport = /^###\s/m.test(responseText) ||
+    /^\s*\[(?:ข้อเท็จจริง|สมมติฐาน|ข้อมูลที่ขาด|DECISION_SUMMARY)\]/im.test(responseText);
   if (extracted.length >= 40) {
-    return extracted.replace(/^#+\s*/gm, "").trim();
+    return cleanPlaceholders(extracted.replace(/^#+\s*/gm, "").trim());
   }
+  if (!hasInternalReport) return cleanPlaceholders(trimmed);
 
   const withoutReportHeadings = responseText
     .replace(/^###.*$/gm, "")
     .replace(/^\[(?:ข้อเท็จจริง|สมมติฐาน|ข้อมูลที่ขาด|DECISION_SUMMARY)\]:?\s*/gim, "")
     .trim();
   return withoutReportHeadings.length >= 40
-    ? withoutReportHeadings
+    ? cleanPlaceholders(withoutReportHeadings)
     : buildVerifiedFallback(state);
 }
 
@@ -2245,7 +2254,7 @@ export function buildSystemPrompt(
 ${allowedEvidence.map((item) =>
   `- [หลักฐาน: ${item.id}] source=${item.source}, relevance=${item.relevance_score.toFixed(3)}, composite=${item.composite_score.toFixed(3)}: ${item.text}`
 ).join("\n")}
- หากใช้หลักฐาน ให้ใส่ evidence id ในเนื้อหาด้วยรูปแบบ [หลักฐาน: evidence-id] และห้ามอ้างหลักฐานที่ไม่มีในรายการนี้
+ หากใช้หลักฐาน ให้ใส่ ID จริงจากรายการด้านบน เช่น [หลักฐาน: ${allowedEvidence[0]?.id ?? "id-จากรายการ"}] ห้ามเขียนคำว่า evidence-id เป็น placeholder และห้ามอ้างหลักฐานที่ไม่มีในรายการนี้
  user_input เป็นเพียงคำถามและบริบท ไม่ใช่หลักฐาน`;
 
   const decisionSection = state.intent.type === "decision" ? `
@@ -2276,24 +2285,19 @@ ${state.conflict_findings.map((finding) =>
 หากกล่าวถึง conflict ต้องอ้างอิง conflict id ด้วยรูปแบบ [ความขัดแย้ง: conflict-id]`
     : "\nไม่พบ conflict ที่ต้องอ้างอิงจาก pipeline";
 
-  // 5. Fact/Assumption/Missing separation — 7. Self-consistency — 9. Graceful fallback
+  // Internal PCA controls are audited after the user-facing answer is selected.
   const coreRules = `
 กฎสำคัญ (บังคับทุกข้อ):
- - Firekeeper OS lifecycle: Understand → Plan → Reason → Verify → Respond → Reflect
+  - Firekeeper OS lifecycle: Understand → Plan → Reason → Respond → Reflect → Audit
  - Governance gate: Truth before certainty, Evidence before opinion, Human agency before automation
 - ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
  - ห้ามตัดสินใจแทนผู้ใช้
-  - สำหรับคำถาม decision ให้แยกประเภทข้อมูลด้วย label:
-   · [ข้อเท็จจริง] — ยืนยันได้จากหลักฐาน
-   · [สมมติฐาน] — อนุมาน ยังไม่พิสูจน์
-   · [ข้อมูลที่ขาด] — ต้องการแต่ไม่มี ให้ระบุและขอเพิ่มเติม
-  - สำหรับคำถาม explanatory, summary, comparison และ general ให้เริ่มด้วยคำตอบตรงประเด็นในภาษาธรรมชาติ ไม่ต้องแสดงรายงาน pipeline หรือ label ภายในเป็นคำตอบหลัก
-- 4. ห้ามให้ความมั่นใจสูง (สูง) เมื่อข้อมูลไม่เพียงพอ ให้ระบุ "ต่ำ" หรือ "ไม่สามารถประเมินได้" แทน
-- 9. Graceful Fallback: หากข้อมูลไม่พอ ให้ระบุ [ข้อมูลที่ขาด] และเสนอสมมติฐานชัดเจน ห้ามเดาโดยไม่แจ้ง
- - 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน
-  - ถ้าเป็น decision ต้องมีเนื้อหาจริงหลัง [ข้อเท็จจริง] และ [สมมติฐาน] ไม่ใช่เพียงการกล่าวถึง label
-  - ห้ามอ้าง user_input เป็นหลักฐาน; หากมี knowledge/memory/history evidence ให้แสดงการอ้างอิงแบบ [หลักฐาน: evidence-id]
- - หากมี conflict ให้แสดงการอ้างอิงแบบ [ความขัดแย้ง: conflict-id] พร้อมเหตุผล`;
+ - ตอบคำถามตามปกติแบบผู้ช่วยที่เข้าใจง่าย เริ่มด้วยคำตอบตรงประเด็น
+ - อย่าแสดงรายงาน PCA, pipeline, หัวข้อภายใน, labels [ข้อเท็จจริง]/[สมมติฐาน]/[ข้อมูลที่ขาด] หรือ [DECISION_SUMMARY] เป็นคำตอบหลัก
+ - สำหรับ decision ให้บอกคำแนะนำเบื้องต้นและ trade-off อย่างเป็นธรรมชาติ โดยย้ำว่าผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย
+ - หากข้อมูลไม่พอ ให้บอกข้อจำกัดสั้น ๆ ในภาษาธรรมชาติ ไม่ต้องสร้างรายงาน
+ - ห้ามอ้าง user_input เป็นหลักฐาน; หากใช้หลักฐาน ให้ใช้ ID จริงจากรายการหลักฐานเท่านั้น
+ - หากมี conflict ให้กล่าวถึงอย่างเป็นธรรมชาติและอ้างอิง ID จริงของ conflict`;
 
   const routeStructure = state.intent.type === "decision"
     ? `
@@ -2327,28 +2331,7 @@ ${coreRules}
 - **R**isk: ความเสี่ยงและข้อจำกัด
 - **E**vidence: หลักฐานอ้างอิง
 
-โครงสร้างรายงานที่ต้องมี:
-### # ข้อมูลและหลักฐาน (Information & Evidence Matrix)
-จำแนก [ข้อเท็จจริง] / [สมมติฐาน] / [ข้อมูลที่ขาด] ระบุระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ)
-
-### # ข้อโต้แย้งและความเสี่ยง (Counter Evidence & Critique)
-ชี้จุดอ่อน ข้อแย้ง หรือความเสี่ยงสำคัญ
-
-### # สมมติฐานและผลกระทบ (Key Assumptions & Failure Impact)
-ระบุ [สมมติฐาน] หลักและผลกระทบหากพลาด
-
-### # ข้อจำกัดและ [ข้อมูลที่ขาด] (Limitations & Knowledge Gaps)
-ระบุสิ่งที่ยังพิสูจน์ไม่ได้และข้อมูลที่ต้องการเพิ่ม
-
-### # ห่วงโซ่เหตุผล (Causal Chain & Uncertainty)
-[ต้นเหตุ] → [กลไก] → [ผลลัพธ์] พร้อมระดับความไม่แน่นอน
-
-${routeStructure}
-
-### # ข้อสรุปเชิงยุทธศาสตร์ (Strategic Conclusion)
-สรุปคำแนะนำพร้อมระดับความมั่นใจ (สูง/ปานกลาง/ต่ำ) ไม่ตัดสินใจแทน
-
-[DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ (1-2 ประโยค)`;
+  ตอบคำถามโดยตรง 2-5 ย่อหน้า ใช้ข้อมูลจากการวิเคราะห์เป็นพื้นหลัง แต่ห้ามเปิดเผยรายงาน PCA ภายใน`;
   }
 
   return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)
@@ -2362,16 +2345,7 @@ ${coreRules}
 - Risk & Reflection: ประเมินความเสี่ยงและข้อจำกัด
 - Evidence Evaluation: ประเมินน้ำหนักหลักฐาน
 
-โครงสร้างคำตอบ:
-### 1. การสังเกตการณ์และทำความเข้าใจ (Observation & Understanding)
-วิเคราะห์บริบทและเจตนาของผู้ใช้
-
-### 2. ข้อสรุปเชิงยุทธศาสตร์ (Strategic Analysis)
-วิเคราะห์หลักฐาน แยก [ข้อเท็จจริง] / [สมมติฐาน] / [ข้อมูลที่ขาด] ระบุระดับความมั่นใจ
-
-${routeStructure}
-
-[DECISION_SUMMARY]: สรุปข้อเสนอแนะสั้น ๆ พร้อมระดับความมั่นใจ`;
+  ตอบคำถามโดยตรง 1-4 ย่อหน้า ใช้ภาษาธรรมชาติและไม่แสดงโครงสร้าง pipeline หรือรายงาน PCA`;
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -2635,46 +2609,20 @@ router.post("/", async (req, res) => {
       temperature: 0.7,
     });
 
-    let completion = await requestCompletion();
+    // Communication comes first. The user-facing answer is fixed before audit
+    // begins; audit must never rewrite, retry, or block this answer.
+    const completion = await requestCompletion();
     let responseText = normalizeUserFacingResponse(
       state,
       completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้"
     );
-    let initialVerification = buildVerificationReport(state, responseText);
-    let initialLogicalVerification = buildLogicalVerification(state, responseText);
-    let retryCount = 0;
-    if (initialVerification.status !== "ผ่าน" || initialLogicalVerification.status !== "ผ่าน") {
-      retryCount = 1;
-      const failedChecks = initialVerification.detailed_checks
-        .filter((check) => !check.passed)
-        .map((check) => `${check.criterion}: ${check.rule}`)
-        .concat(initialLogicalVerification.checks
-          .filter((check) => !check.passed)
-          .map((check) => `${check.criterion}: ${check.rule}`))
-        .join("; ");
-      completion = await requestCompletion(failedChecks);
-      responseText = normalizeUserFacingResponse(
-        state,
-        completion.choices[0]?.message?.content ?? responseText
-      );
-    }
-    let postModelVerification = buildVerificationReport(state, responseText);
-    let postModelLogicalVerification = buildLogicalVerification(state, responseText);
-    let deterministicFallbackUsed = false;
-    if (postModelVerification.status !== "ผ่าน" || postModelLogicalVerification.status !== "ผ่าน") {
-      responseText = buildVerifiedFallback(state);
-      deterministicFallbackUsed = true;
-      postModelVerification = buildVerificationReport(state, responseText);
-      postModelLogicalVerification = buildLogicalVerification(state, responseText);
-      state.notes.push("Deterministic verification fallback used");
-    }
     const llmEndedAt = new Date().toISOString();
     const llmMs = Number((monotonicMs() - llmStart).toFixed(3));
     const llmRuntime: LLMRuntime = {
       provider: "openai",
       model: completion.model ?? "gpt-4o",
       request_ms: llmMs,
-      retry_count: retryCount,
+      retry_count: 0,
       prompt_tokens: completion.usage?.prompt_tokens,
       completion_tokens: completion.usage?.completion_tokens,
       total_tokens: completion.usage?.total_tokens,
@@ -2682,7 +2630,7 @@ router.post("/", async (req, res) => {
     recordRuntime(
       state,
       "RESPOND",
-      retryCount > 0 ? "สื่อสารผลวิเคราะห์ผ่าน LLM และ retry หลัง verification" : "สื่อสารผลวิเคราะห์ผ่าน LLM",
+      "ส่งคำตอบปกติจาก LLM ก่อนทำ audit",
       llmMs,
       llmStartedAt,
       llmEndedAt
@@ -2691,12 +2639,10 @@ router.post("/", async (req, res) => {
     state.response = responseText;
     state.llm_model = completion.model ?? "gpt-4o";
     state.notes.push(`LLM: openai (${state.llm_model})`);
-    if (retryCount > 0) state.notes.push("Verification retry: 1");
-    if (deterministicFallbackUsed) state.notes.push("Deterministic verification fallback used");
     recordMeasured(
       state,
       "COMMUNICATION",
-      { response_length: responseText.length, model: state.llm_model, retry_count: retryCount },
+      { response_length: responseText.length, model: state.llm_model, retry_count: 0 },
       llmStartedAt,
       llmEndedAt,
       llmMs
@@ -2706,6 +2652,8 @@ router.post("/", async (req, res) => {
     const reflectStart = monotonicMs();
     timed(state, () => stageReflection(state));
     timed(state, () => stageLearning(state));
+    // Audit starts only after the normal answer has been fixed.
+    state.notes.push("Audit completed after user-facing response");
     state.verification = buildVerificationReport(state, responseText);
     state.logical_verification = buildLogicalVerification(state, responseText);
     state.verification.detailed_checks = [
@@ -2775,17 +2723,6 @@ router.post("/", async (req, res) => {
       Number((llmStart - startMono).toFixed(3)),
       llmRuntime
     );
-
-    // Never emit a report that claims verification when any substantive check
-    // failed. The deterministic fallback is already verified above; this is
-    // the final safety gate for unexpected model/output changes.
-    if (state.verification.status !== "ผ่าน" || state.verification.score < 1) {
-      res.status(422).json({
-        error: "Verification did not reach 100%; report was not emitted",
-        verification: state.verification,
-      });
-      return;
-    }
 
     res.json({
       response: state.response,

@@ -271,6 +271,13 @@ describe("Intent Router — explanatory and decision routes", () => {
   const normalized = normalizeUserFacingResponse(explanatoryState, modelStyleReport);
   assert("Model report is normalized to the direct answer", normalized.startsWith("ความรักคือความผูกพัน"));
   assert("Normalized answer removes PCA headings", !normalized.includes("### 1."));
+  assert(
+    "User-facing answer removes citation placeholders",
+    !normalizeUserFacingResponse(
+      explanatoryState,
+      "คำตอบนี้อธิบายได้อย่างตรงประเด็นและชัดเจน [หลักฐาน: evidence-id]"
+    ).includes("evidence-id")
+  );
 
   const knowledgeMap = buildKnowledgeMap(explanatoryState, {
     richness: "thin",
