@@ -820,6 +820,10 @@ export function buildVerificationReport(
 ): VerificationReport {
   const checks: string[] = [];
   const detailed_checks: VerificationCheck[] = [];
+  const isDecisionRoute = state.intent.type === "decision";
+  const hasDirectAnswer = responseText.trim().length >= 40 &&
+    (/คำตอบตรงประเด็น|คำตอบเบื้องต้น|คำตอบคือ|โดยสรุป|direct answer|in summary/i.test(responseText) ||
+      !/^\s*\[(?:ข้อเท็จจริง|สมมติฐาน|ข้อมูลที่ขาด)\]/i.test(responseText));
   const hasSubstantiveLabel = (labels: RegExp): boolean => {
     const match = labels.exec(responseText);
     if (!match) return false;
@@ -828,11 +832,12 @@ export function buildVerificationReport(
   };
   const hasFactLabel = hasSubstantiveLabel(/\[ข้อเท็จจริง\]|\[Fact\]/i);
   const hasAssumptionLabel = hasSubstantiveLabel(/\[สมมติฐาน\]|\[Assumption\]/i);
-  const requiresAgency = state.intent.type === "decision";
+  const requiresAgency = isDecisionRoute;
   const preservesAgency = !requiresAgency || /ผู้ใช้|ตัดสินใจขั้นสุดท้าย|human agency|final decision/i.test(
     responseText
   );
   const surfacesMissingInfo =
+    !isDecisionRoute ||
     state.missing_info.length === 0 ||
     (
       /\[ข้อมูลที่ขาด\]|\[missing information\]|ข้อมูลที่ต้องการเพิ่ม/i.test(responseText) &&
@@ -874,17 +879,25 @@ export function buildVerificationReport(
   detailed_checks.push(
     {
       criterion: "fact_label",
-      rule: "response ต้องมี [ข้อเท็จจริง] หรือ [Fact]",
-      passed: hasFactLabel,
-      evidence: hasFactLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด",
-      score: hasFactLabel ? 1 : 0,
+      rule: isDecisionRoute
+        ? "response ต้องมี [ข้อเท็จจริง] หรือ [Fact]"
+        : "คำตอบที่ไม่ใช่ decision ต้องตอบตรงประเด็น",
+      passed: isDecisionRoute ? hasFactLabel : hasDirectAnswer,
+      evidence: isDecisionRoute
+        ? hasFactLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด"
+        : hasDirectAnswer ? "พบคำตอบตรงประเด็น" : "ไม่พบคำตอบที่ชัดเจน",
+      score: isDecisionRoute ? hasFactLabel ? 1 : 0 : hasDirectAnswer ? 1 : 0,
     },
     {
       criterion: "assumption_label",
-      rule: "response ต้องมี [สมมติฐาน] หรือ [Assumption]",
-      passed: hasAssumptionLabel,
-      evidence: hasAssumptionLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด",
-      score: hasAssumptionLabel ? 1 : 0,
+      rule: isDecisionRoute
+        ? "response ต้องมี [สมมติฐาน] หรือ [Assumption]"
+        : "คำตอบที่ไม่ใช่ decision ไม่ต้องแสดงโครงสร้างภายในของ pipeline",
+      passed: isDecisionRoute ? hasAssumptionLabel : hasDirectAnswer,
+      evidence: isDecisionRoute
+        ? hasAssumptionLabel ? "พบ label ใน response" : "ไม่พบ label ที่กำหนด"
+        : hasDirectAnswer ? "ไม่บังคับแสดง assumption ในคำตอบหลัก" : "ไม่พบคำตอบที่ชัดเจน",
+      score: isDecisionRoute ? hasAssumptionLabel ? 1 : 0 : hasDirectAnswer ? 1 : 0,
     },
     {
       criterion: "human_agency",
@@ -948,6 +961,50 @@ export function buildVerificationReport(
 
 export function buildVerifiedFallback(state: PCAState): string {
   const supportedEvidence = state.evidence_report.items.filter((item) => item.source !== "user_input");
+  const cite = (item: EvidenceItem): string => `${item.text} [หลักฐาน: ${item.id}]`;
+  const directAnswer = (() => {
+    if (state.intent.type === "explanatory") {
+      if (supportedEvidence.length === 0) {
+        return state.language === "th"
+          ? "คำตอบตรงประเด็น: ตอนนี้ยังไม่มีข้อมูลความรู้ที่เพียงพอสำหรับอธิบายเรื่องนี้อย่างน่าเชื่อถือ"
+          : "Direct answer: There is not enough supported knowledge to explain this reliably yet.";
+      }
+      const primary = cite(supportedEvidence[0]);
+      const supporting = supportedEvidence[1] ? ` ${cite(supportedEvidence[1])}` : "";
+      return state.language === "th"
+        ? `คำตอบตรงประเด็น: ${primary}${supporting}`
+        : `Direct answer: ${primary}${supporting}`;
+    }
+    if (state.intent.type === "summary") {
+      return state.language === "th"
+        ? `คำตอบตรงประเด็น: ${supportedEvidence.length > 0
+          ? supportedEvidence.slice(0, 3).map(cite).join(" ")
+          : "ยังไม่มีข้อมูลที่รองรับเพียงพอสำหรับสรุป"}`
+        : `Direct answer: ${supportedEvidence.length > 0
+          ? supportedEvidence.slice(0, 3).map(cite).join(" ")
+          : "There is not enough supported information to summarize."}`;
+    }
+    if (state.intent.type === "comparison") {
+      return state.language === "th"
+        ? `คำตอบตรงประเด็น: การเปรียบเทียบควรพิจารณาจากข้อมูลที่รองรับต่อไปนี้ — ${
+          supportedEvidence.length > 0 ? supportedEvidence.slice(0, 3).map(cite).join(" ") : "ยังไม่มีข้อมูลเปรียบเทียบที่เพียงพอ"
+        }`
+        : `Direct answer: The comparison should be based on the following supported information — ${
+          supportedEvidence.length > 0 ? supportedEvidence.slice(0, 3).map(cite).join(" ") : "there is not enough supported comparison data yet."
+        }`;
+    }
+    if (state.intent.type === "decision") {
+      const selected = state.decision_matrix.options.find(
+        (option) => option.id === state.decision_matrix.selected_option
+      );
+      return state.language === "th"
+        ? `คำตอบเบื้องต้น: จากข้อมูลและข้อจำกัดปัจจุบัน ระบบให้น้ำหนักกับทางเลือก “${selected?.label ?? "เก็บข้อมูลเพิ่ม"}” แต่ยังไม่ใช่การตัดสินใจแทนผู้ใช้`
+        : `Preliminary answer: Given the current information and constraints, the system favors “${selected?.label ?? "gather more information"}” without making the decision for the user.`;
+    }
+    return state.language === "th"
+      ? `คำตอบตรงประเด็น: ${supportedEvidence.length > 0 ? supportedEvidence.slice(0, 2).map(cite).join(" ") : "ยังไม่มีข้อมูลที่รองรับเพียงพอสำหรับตอบอย่างมั่นใจ"}`
+      : `Direct answer: ${supportedEvidence.length > 0 ? supportedEvidence.slice(0, 2).map(cite).join(" ") : "There is not enough supported information to answer confidently."}`;
+  })();
   const evidenceText = supportedEvidence.length > 0
     ? supportedEvidence
       .slice(0, 3)
@@ -973,41 +1030,11 @@ export function buildVerifiedFallback(state: PCAState): string {
     .map((option) => `- ${option.label}: คะแนน ${option.weighted_score.toFixed(3)} — ${option.rationale}`)
     .join("\n");
 
-  if (state.intent.type !== "decision") {
-    const routeTitle: Record<IntentType, string> = {
-      explanatory: "คำอธิบาย",
-      summary: "สรุปสาระสำคัญ",
-      comparison: "การเปรียบเทียบ",
-      general: "คำตอบ",
-      decision: "ข้อสรุป",
-    };
-    const conclusion = state.intent.type === "explanatory"
-      ? state.language === "th"
-        ? "โดยสรุป ความหมายของหัวข้อนี้ควรเข้าใจจากแนวคิดและบริบทที่เกี่ยวข้อง ไม่ใช่จากทางเลือกการดำเนินการ"
-        : "In summary, this topic should be understood through its concepts and context, not through an action choice."
-      : state.language === "th"
-        ? "โดยสรุป คำตอบนี้จัดทำตามประเภทคำถามโดยไม่สมมติว่าผู้ใช้ต้องเลือกแนวทางดำเนินการ"
-        : "In summary, this answer follows the question type without assuming that the user needs to choose an action.";
-    return `[ข้อเท็จจริง]
-${evidenceText}
+  if (state.intent.type !== "decision") return directAnswer;
 
-[สมมติฐาน]
-${assumptionText || "- ยังไม่มีสมมติฐานเพิ่มเติม"}
+  return `${directAnswer}
 
-[ข้อมูลที่ขาด]
-${missingText}
-
-[ข้อจำกัดและความขัดแย้ง]
-${conflictText}
-
-[${routeTitle[state.intent.type]}]
-${conclusion}
-
-[ข้อสรุป]
-${conclusion}`;
-  }
-
-  return `[ข้อเท็จจริง]
+[ข้อเท็จจริง]
 ${evidenceText}
 
 [สมมติฐาน]
@@ -1026,6 +1053,27 @@ ${optionText}
 ทางเลือกที่ pipeline เลือกคือ ${selected?.label ?? state.decision_matrix.selected_option} เพราะมี weighted score ${state.decision_matrix.selected_score.toFixed(3)} ภายใต้หลักฐานและข้อจำกัดปัจจุบัน
 
 ผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย ควรตรวจสอบข้อมูลเพิ่มเติมก่อนดำเนินการในเรื่องที่มีผลกระทบสูง`;
+}
+
+export function normalizeUserFacingResponse(state: PCAState, responseText: string): string {
+  if (state.intent.type === "decision") return responseText.trim();
+
+  const sectionMatch = responseText.match(
+    /(?:^|\n)###\s*(?:#\s*)?3\.\s*[^\n]*(?:คำอธิบาย|สรุป|เปรียบเทียบ|คำตอบ)[^\n]*\n([\s\S]*?)(?=\n###|\n\[DECISION_SUMMARY\]|\s*$)/i
+  );
+  const summaryMatch = responseText.match(/\[DECISION_SUMMARY\]:\s*([\s\S]*)/i);
+  const extracted = (sectionMatch?.[1] ?? summaryMatch?.[1] ?? "").trim();
+  if (extracted.length >= 40) {
+    return extracted.replace(/^#+\s*/gm, "").trim();
+  }
+
+  const withoutReportHeadings = responseText
+    .replace(/^###.*$/gm, "")
+    .replace(/^\[(?:ข้อเท็จจริง|สมมติฐาน|ข้อมูลที่ขาด|DECISION_SUMMARY)\]:?\s*/gim, "")
+    .trim();
+  return withoutReportHeadings.length >= 40
+    ? withoutReportHeadings
+    : buildVerifiedFallback(state);
 }
 
 export function buildReasoningQuality(state: PCAState): ReasoningQualityMetrics {
@@ -1594,21 +1642,29 @@ export function buildLogicalVerification(state: PCAState, responseText: string):
   const factIndex = responseText.search(/\[ข้อเท็จจริง\]|\[Fact\]/i);
   const assumptionIndex = responseText.search(/\[สมมติฐาน\]|\[Assumption\]/i);
   const conclusionIndex = responseText.search(/ข้อสรุป|สรุป|decision summary|strategic conclusion/i);
-  const hasConclusion = conclusionIndex >= 0;
+  const routeAnswerIndex = responseText.search(/คำตอบตรงประเด็น|คำตอบเบื้องต้น|direct answer|in summary/i);
+  const hasConclusion = state.intent.type !== "decision"
+    ? responseText.trim().length >= 40
+    : conclusionIndex >= 0 || routeAnswerIndex >= 0;
   const hasFactAndAssumption = /\[ข้อเท็จจริง\]|\[Fact\]/i.test(responseText) &&
     /\[สมมติฐาน\]|\[Assumption\]/i.test(responseText);
-  const conclusionConsistent = hasConclusion && hasFactAndAssumption &&
-    conclusionIndex > factIndex &&
-    conclusionIndex > assumptionIndex &&
-    (state.intent.type !== "decision" ||
-      !(/\[ข้อเท็จจริง\][\s\S]{0,180}(?:อาจ|น่าจะ|คาดว่า)/i.test(responseText)));
+  const conclusionConsistent = state.intent.type !== "decision"
+    ? hasConclusion && responseText.trim().length >= 40
+    : hasConclusion && hasFactAndAssumption &&
+      conclusionIndex > factIndex &&
+      conclusionIndex > assumptionIndex &&
+      !(/\[ข้อเท็จจริง\][\s\S]{0,180}(?:อาจ|น่าจะ|คาดว่า)/i.test(responseText));
   checks.push({
     criterion: "fact_conclusion_consistency",
-    rule: "ข้อเท็จจริงต้องไม่ถูกเขียนเป็นสมมติฐาน และต้องมีข้อสรุปที่แยกจาก facts",
+    rule: state.intent.type === "decision"
+      ? "ข้อเท็จจริงต้องไม่ถูกเขียนเป็นสมมติฐาน และต้องมีข้อสรุปที่แยกจาก facts"
+      : "คำตอบ non-decision ต้องมีคำตอบตรงประเด็นที่สอดคล้องกับ intent route",
     passed: conclusionConsistent,
     evidence: conclusionConsistent
-      ? "พบ facts/assumptions แยกกันและมีข้อสรุป"
-      : "ไม่พบโครงสร้าง facts → reasoning → conclusion ที่สอดคล้อง",
+      ? state.intent.type === "decision"
+        ? "พบ facts/assumptions แยกกันและมีข้อสรุป"
+        : "พบคำตอบตรงประเด็นตาม intent route"
+      : "ไม่พบโครงสร้างคำตอบที่สอดคล้องกับ intent route",
     score: conclusionConsistent ? 1 : 0,
   });
 
@@ -2227,14 +2283,15 @@ ${state.conflict_findings.map((finding) =>
  - Governance gate: Truth before certainty, Evidence before opinion, Human agency before automation
 - ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
  - ห้ามตัดสินใจแทนผู้ใช้
-- แยกประเภทข้อมูลด้วย label ดังนี้:
-  · [ข้อเท็จจริง] — ยืนยันได้จากหลักฐาน
-  · [สมมติฐาน] — อนุมาน ยังไม่พิสูจน์
-  · [ข้อมูลที่ขาด] — ต้องการแต่ไม่มี ให้ระบุและขอเพิ่มเติม
+  - สำหรับคำถาม decision ให้แยกประเภทข้อมูลด้วย label:
+   · [ข้อเท็จจริง] — ยืนยันได้จากหลักฐาน
+   · [สมมติฐาน] — อนุมาน ยังไม่พิสูจน์
+   · [ข้อมูลที่ขาด] — ต้องการแต่ไม่มี ให้ระบุและขอเพิ่มเติม
+  - สำหรับคำถาม explanatory, summary, comparison และ general ให้เริ่มด้วยคำตอบตรงประเด็นในภาษาธรรมชาติ ไม่ต้องแสดงรายงาน pipeline หรือ label ภายในเป็นคำตอบหลัก
 - 4. ห้ามให้ความมั่นใจสูง (สูง) เมื่อข้อมูลไม่เพียงพอ ให้ระบุ "ต่ำ" หรือ "ไม่สามารถประเมินได้" แทน
 - 9. Graceful Fallback: หากข้อมูลไม่พอ ให้ระบุ [ข้อมูลที่ขาด] และเสนอสมมติฐานชัดเจน ห้ามเดาโดยไม่แจ้ง
  - 7. Self-Consistency: หากมีประวัติการสนทนา ต้องตรวจสอบว่าคำตอบใหม่ไม่ขัดแย้งกับที่เคยให้ไว้ หากต้องเปลี่ยนจุดยืนให้อธิบายเหตุผลชัดเจน
- - ต้องมีเนื้อหาจริงหลัง [ข้อเท็จจริง] และ [สมมติฐาน] ไม่ใช่เพียงการกล่าวถึง label
+  - ถ้าเป็น decision ต้องมีเนื้อหาจริงหลัง [ข้อเท็จจริง] และ [สมมติฐาน] ไม่ใช่เพียงการกล่าวถึง label
   - ห้ามอ้าง user_input เป็นหลักฐาน; หากมี knowledge/memory/history evidence ให้แสดงการอ้างอิงแบบ [หลักฐาน: evidence-id]
  - หากมี conflict ให้แสดงการอ้างอิงแบบ [ความขัดแย้ง: conflict-id] พร้อมเหตุผล`;
 
@@ -2579,7 +2636,10 @@ router.post("/", async (req, res) => {
     });
 
     let completion = await requestCompletion();
-    let responseText = completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
+    let responseText = normalizeUserFacingResponse(
+      state,
+      completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้"
+    );
     let initialVerification = buildVerificationReport(state, responseText);
     let initialLogicalVerification = buildLogicalVerification(state, responseText);
     let retryCount = 0;
@@ -2593,7 +2653,10 @@ router.post("/", async (req, res) => {
           .map((check) => `${check.criterion}: ${check.rule}`))
         .join("; ");
       completion = await requestCompletion(failedChecks);
-      responseText = completion.choices[0]?.message?.content ?? responseText;
+      responseText = normalizeUserFacingResponse(
+        state,
+        completion.choices[0]?.message?.content ?? responseText
+      );
     }
     let postModelVerification = buildVerificationReport(state, responseText);
     let postModelLogicalVerification = buildLogicalVerification(state, responseText);

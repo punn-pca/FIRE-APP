@@ -14,3 +14,9 @@ Intent routing is a control boundary, not only a display field: explanatory, sum
 **Why:** The question itself cannot substantiate its answer, while an evidence-free but explicitly bounded decision response can still pass when the system clearly identifies missing information and preserves human agency.
 
 **How to apply:** Filter `user_input` from allowed citations and reasoning claims, allow zero citations only when the allowed evidence set is empty, and keep the overall verification gate at 100%.
+
+User-facing answers must be normalized separately from PCA audit output: non-decision routes should return the extracted natural-language answer, while lifecycle, evidence, verification, and reasoning metadata remain in `pcaState` and exports.
+
+**Why:** A valid LLM analysis can still be a poor product response when it exposes the full internal report instead of answering the user's question.
+
+**How to apply:** After communication and before final verification, extract the route's answer section or use a direct deterministic fallback; test both content quality and removal of internal PCA headings.

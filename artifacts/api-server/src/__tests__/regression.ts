@@ -22,6 +22,7 @@ import {
   buildStateTransitions,
   buildSystemPrompt,
   buildVerifiedFallback,
+  normalizeUserFacingResponse,
   classifyIntent,
   type PCAState,
   type ConversationTurn,
@@ -236,11 +237,40 @@ describe("Intent Router — explanatory and decision routes", () => {
   const explanatoryFallback = buildVerifiedFallback(explanatoryState);
   assert("Explanatory route has no decision alternatives", explanatoryState.decision_matrix.options.length === 0);
   assert("Explanatory fallback does not recommend phased action", !explanatoryFallback.includes("ดำเนินการเป็นระยะ"));
-  assert("Explanatory fallback contains a meaning conclusion", explanatoryFallback.includes("ความหมาย"));
+  assert(
+    "Explanatory fallback contains the supported meaning",
+    explanatoryFallback.includes("ความรักเป็นความผูกพัน")
+  );
+  assert(
+    "Explanatory fallback answers directly",
+    explanatoryFallback.includes("คำตอบตรงประเด็น:") &&
+      explanatoryFallback.includes("ความรักเป็นความผูกพัน")
+  );
+  assert(
+    "Explanatory verification accepts a natural direct answer",
+    buildVerificationReport(explanatoryState, explanatoryFallback).status === "ผ่าน"
+  );
+  assert(
+    "Explanatory logical verification accepts a natural direct answer",
+    buildLogicalVerification(explanatoryState, explanatoryFallback).status === "ผ่าน"
+  );
   assert(
     "Explanatory fallback passes route-aware logical verification",
     buildLogicalVerification(explanatoryState, explanatoryFallback).status === "ผ่าน"
   );
+  const modelStyleReport = `### 1. การสังเกตการณ์และทำความเข้าใจ
+คำถามนี้ต้องการความหมาย
+
+### 2. ข้อสรุปเชิงยุทธศาสตร์
+[ข้อเท็จจริง]: ความรักเป็นความผูกพันทางอารมณ์
+
+### 3. คำอธิบายและข้อสรุป
+ความรักคือความผูกพันทางอารมณ์และสังคมที่แสดงผ่านความใกล้ชิด ความห่วงใย และการดูแลกัน [หลักฐาน: knowledge-love-definition]
+
+[DECISION_SUMMARY]: ความรักคือความผูกพันทางอารมณ์และสังคม`;
+  const normalized = normalizeUserFacingResponse(explanatoryState, modelStyleReport);
+  assert("Model report is normalized to the direct answer", normalized.startsWith("ความรักคือความผูกพัน"));
+  assert("Normalized answer removes PCA headings", !normalized.includes("### 1."));
 
   const knowledgeMap = buildKnowledgeMap(explanatoryState, {
     richness: "thin",
