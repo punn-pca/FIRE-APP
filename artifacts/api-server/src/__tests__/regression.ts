@@ -458,11 +458,14 @@ describe("buildVerificationReport — substantive checks", () => {
 
 describe("buildReportLayers — separated output contract", () => {
   const state = makeVerificationState();
-  state.response = "คำตอบปกติสำหรับผู้ใช้";
+  state.response = "คำตอบปกติสำหรับผู้ใช้ที่มีรายละเอียดสำคัญและไม่ควรถูกตัดทอน " +
+    "เพื่อให้ผู้ใช้เห็นบริบทครบถ้วน รวมถึงข้อสรุปและเงื่อนไขประกอบการตัดสินใจ";
+  state.missing_info = ["งบประมาณที่ยืนยันแล้ว"];
   const reports = buildReportLayers(state);
   assert("User Report contains the fixed answer", reports.user_report.answer === state.response);
   assert("User Report contains an executive summary", reports.user_report.executive_summary.length > 0);
-  assert("Executive Summary stays concise", reports.user_report.executive_summary.length <= 240);
+  assert("Executive Summary keeps the complete answer", reports.user_report.executive_summary.includes(state.response));
+  assert("Executive Summary includes key missing information", reports.user_report.executive_summary.includes("งบประมาณที่ยืนยันแล้ว"));
   assert("Analyst Report contains evidence", reports.analyst_report.evidence_report === state.evidence_report);
   assert("System Trace contains runtime trace", reports.system_trace.trace === state.trace);
   assert("Confidence is shared across reports", reports.confidence_summary.score === state.confidence_report.score);

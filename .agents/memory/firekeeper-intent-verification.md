@@ -32,3 +32,15 @@ User-facing answers should be concise natural Markdown: lead with the answer, us
 **Why:** The underlying analysis is multi-stage, but showing its internal structure makes ordinary answers noisy and difficult to scan on mobile.
 
 **How to apply:** Keep PCA metadata in the collapsible report tabs, constrain the communication prompt to clean formatting, and render headings, lists, and horizontally scrollable tables in the answer bubble.
+
+Executive Summary is a complete decision-facing digest, not a character-limited excerpt: preserve the full answer and append relevant missing information, conflicts, and decision direction when available.
+
+**Why:** A short excerpt removed the context users needed, especially for comparisons and decisions with limitations or trade-offs.
+
+**How to apply:** Generate the summary from the final state after response normalization, and use the same complete summary in the User Report UI and exports.
+
+HTML/PDF exports must preserve the report-layer boundary as three independently selectable documents: User Report, Analyst Report, and System Trace.
+
+**Why:** A single combined document hid the intended audience and made it unclear which report a user was sharing.
+
+**How to apply:** Keep the combined report as an optional legacy path, but expose explicit report-type selection and include the selected type in the filename and document title.

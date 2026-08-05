@@ -408,7 +408,24 @@ const STAGE_INFO: Record<string, { icon: string; th: string; en: string; desc: s
 
 // ─── HTML Report Generator ────────────────────────────────────────────────────
 
-function generateHtmlReport(question: string, answer: string, pca: PCAState): string {
+type ReportKind = 'all' | 'user' | 'analyst' | 'system';
+
+const REPORT_KIND_LABELS: Record<Exclude<ReportKind, 'all'>, string> = {
+  user: 'User Report',
+  analyst: 'Analyst Report',
+  system: 'System Trace',
+};
+
+function generateHtmlReport(
+  question: string,
+  answer: string,
+  pca: PCAState,
+  kind: ReportKind = 'all',
+  reports?: ReportLayers,
+): string {
+  if (kind !== 'all') {
+    return generateSeparatedReportHtml(question, answer, pca, kind, reports);
+  }
   const totalMs = pca.execution_time_ms ?? 0;
   const maxMs = Math.max(...pca.trace.map((t) => t.duration_ms ?? 0), 1);
   const dateStr = formatThaiDateTime(pca.start_time);
@@ -548,6 +565,7 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
   const factItems = (pca.knowledge_map?.facts ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const assumptionItems = (pca.knowledge_map?.assumptions ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const unknownItems = (pca.knowledge_map?.unknowns ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
+  const executiveSummary = reports?.user_report.executive_summary ?? answer;
 
   return `<!DOCTYPE html>
 <html lang="th">
@@ -669,7 +687,7 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 <!-- USER REPORT -->
 <div class="section">
   <div class="sec-title">👤 User Report — รายงานสำหรับผู้ใช้</div>
-  <div class="question-box"><strong>Executive Summary</strong><br>${escHtml(answer.length > 240 ? `${answer.slice(0, 237).trimEnd()}...` : answer)}</div>
+  <div class="question-box"><strong>Executive Summary</strong><br>${escHtml(executiveSummary).replace(/\n/g, '<br>')}</div>
   <div class="answer-box">${escHtml(answer)}</div>
   <div class="score-box">
     <span class="score-chip">intent: ${escHtml(pca.intent?.type ?? 'general')}</span>
@@ -934,6 +952,194 @@ function escHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function reportList(items: string[], empty = 'ไม่มีข้อมูล'): string {
+  return items.length > 0
+    ? `<ul>${items.map((item) => `<li>${escHtml(item)}</li>`).join('')}</ul>`
+    : `<p class="muted">${escHtml(empty)}</p>`;
+}
+
+function reportTable(headers: string[], rows: string[][], empty = 'ไม่มีข้อมูล'): string {
+  if (rows.length === 0) return `<p class="muted">${escHtml(empty)}</p>`;
+  return `<div class="table-wrap"><table><thead><tr>${headers.map((header) => `<th>${escHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) =>
+    `<tr>${headers.map((_, index) => `<td>${escHtml(row[index] ?? '—')}</td>`).join('')}</tr>`
+  ).join('')}</tbody></table></div>`;
+}
+
+function generateSeparatedReportHtml(
+  question: string,
+  answer: string,
+  pca: PCAState,
+  kind: Exclude<ReportKind, 'all'>,
+  reports?: ReportLayers,
+): string {
+  const userReport = reports?.user_report;
+  const analystReport = reports?.analyst_report;
+  const systemTrace = reports?.system_trace;
+  const title = REPORT_KIND_LABELS[kind];
+  const dateStr = formatThaiDateTime(pca.start_time);
+  const confidence = reports?.confidence_summary ?? {
+    score: pca.confidence_report?.score ?? 0,
+    band: pca.confidence,
+  };
+
+  const section = (heading: string, content: string) =>
+    `<section><h2>${escHtml(heading)}</h2>${content}</section>`;
+
+  let body = '';
+  if (kind === 'user') {
+    const summary = userReport?.executive_summary ?? answer;
+    body = [
+      section('Executive Summary — ใจความสำคัญครบถ้วน', `<div class="summary">${escHtml(summary).replace(/\n/g, '<br>')}</div>`),
+      section('คำถาม', `<div class="question">${escHtml(question)}</div>`),
+      section('คำตอบสำหรับผู้ใช้', `<div class="answer">${escHtml(userReport?.answer ?? answer)}</div>`),
+      section('ข้อมูลประกอบ', reportTable(
+        ['รายการ', 'รายละเอียด'],
+        [
+          ['ประเภทคำถาม', userReport?.route?.type ?? pca.intent?.type ?? 'general'],
+          ['ความมั่นใจ', `${confidence.band} · ${confidence.score.toFixed(1)}/100`],
+          ['ข้อจำกัด', userReport?.limitations.join(' · ') || 'ไม่พบข้อจำกัดเพิ่มเติม'],
+          ['ขั้นถัดไป', userReport?.next_step ?? 'ไม่มีขั้นถัดไปที่กำหนด'],
+        ],
+      )),
+    ].join('');
+  } else if (kind === 'analyst') {
+    const evidence = analystReport?.evidence_report ?? pca.evidence_report;
+    const knowledge = analystReport?.knowledge_map ?? pca.knowledge_map;
+    const verification = analystReport?.verification ?? pca.verification;
+    const logical = analystReport?.logical_verification ?? pca.logical_verification;
+    const reasoning = analystReport?.reasoning_quality ?? pca.reasoning_quality;
+    body = [
+      section('Evidence — หลักฐาน', reportTable(
+        ['แหล่ง', 'เนื้อหา', 'คะแนนรวม'],
+        (evidence?.items ?? []).map((item) => [item.source, item.text, item.composite_score.toFixed(3)]),
+      )),
+      section('Knowledge Map — ข้อเท็จจริง สมมติฐาน และข้อมูลที่ขาด', [
+        `<h3>ข้อเท็จจริง</h3>${reportList(knowledge?.facts ?? [])}`,
+        `<h3>สมมติฐาน</h3>${reportList(knowledge?.assumptions ?? [])}`,
+        `<h3>ข้อมูลที่ขาด</h3>${reportList(knowledge?.unknowns ?? [])}`,
+      ].join('')),
+      section('Reasoning — คุณภาพเหตุผล', reportTable(
+        ['รายการ', 'ค่า'],
+        [
+          ['Evidence count', String(reasoning?.evidence_count ?? 0)],
+          ['Evidence coverage', (reasoning?.evidence_coverage ?? 0).toFixed(3)],
+          ['Evidence quality', (reasoning?.evidence_quality ?? 0).toFixed(3)],
+          ['Unsupported claims', String(reasoning?.unsupported_claim_count ?? 0)],
+          ['Decision margin', (reasoning?.decision_margin ?? 0).toFixed(3)],
+        ],
+      )),
+      section('Decision — ทางเลือกและข้อแลกเปลี่ยน', pca.intent?.type === 'decision' && pca.decision_matrix
+        ? reportTable(
+          ['ทางเลือก', 'คะแนน', 'เหตุผล / ข้อแลกเปลี่ยน'],
+          pca.decision_matrix.options.map((option) => [
+            option.label,
+            option.weighted_score.toFixed(3),
+            option.rationale,
+          ]),
+        )
+        : '<p class="muted">คำถามนี้ไม่ใช่เส้นทางการตัดสินใจ</p>'),
+      section('Verification — การตรวจสอบ', reportTable(
+        ['รายการ', 'ผล'],
+        [
+          ['Verification', `${verification?.status ?? 'ต้องตรวจสอบ'} · ${((verification?.score ?? 0) * 100).toFixed(1)}%`],
+          ['Logical verification', `${logical?.status ?? 'ต้องตรวจสอบ'} · ${((logical?.score ?? 0) * 100).toFixed(1)}%`],
+          ['Consistency', verification?.consistency ?? '—'],
+          ['Missing information', (analystReport?.missing_info ?? pca.missing_info ?? []).join(' · ') || 'ไม่มี'],
+          ['Conflicts', String((analystReport?.conflicts ?? pca.conflict_findings ?? []).length)],
+        ],
+      )),
+    ].join('');
+  } else {
+    const trace = systemTrace ?? {
+      notes: pca.notes ?? [],
+      runtime_summary: pca.runtime_summary,
+      runtime_lifecycle: pca.runtime_lifecycle ?? [],
+      trace: pca.trace ?? [],
+      dataflow: pca.dataflow ?? [],
+      runtime_metrics: pca.runtime_metrics ?? [],
+      module_audit: pca.module_audit ?? [],
+      state_transitions: pca.state_transitions ?? [],
+      reasoning_graph: pca.reasoning_graph,
+    };
+    body = [
+      section('Runtime Summary', reportTable(
+        ['รายการ', 'ค่า'],
+        [
+          ['Cognitive total', `${trace.runtime_summary?.cognitive.total_ms.toFixed(1) ?? '0.0'} ms`],
+          ['LLM request', `${trace.runtime_summary?.llm.request_ms.toFixed(1) ?? '0.0'} ms`],
+          ['Trace stages', String(trace.trace.length)],
+          ['Dataflow edges', String(trace.dataflow.length)],
+          ['Lifecycle events', String(trace.runtime_lifecycle.length)],
+        ],
+      )),
+      section('Runtime Lifecycle', reportTable(
+        ['Phase', 'Action', 'Duration'],
+        trace.runtime_lifecycle.map((event) => [
+          event.phase,
+          event.action,
+          event.measured === false ? 'phase marker' : `${event.duration_ms.toFixed(3)} ms`,
+        ]),
+      )),
+      section('Trace', reportTable(
+        ['Stage', 'Duration', 'Measured'],
+        trace.trace.map((entry) => [
+          entry.stage,
+          `${(entry.duration_ms ?? 0).toFixed(3)} ms`,
+          entry.measured === false ? 'phase marker' : 'runtime measured',
+        ]),
+      )),
+      section('Dataflow', reportTable(
+        ['จาก', 'ถึง', 'Transformation', 'Items'],
+        trace.dataflow.map((flow) => [flow.from, flow.to, flow.transformation, String(flow.item_count)]),
+      )),
+      section('Module Audit / Metrics', reportTable(
+        ['Module', 'Algorithm / Runtime', 'Score / Items'],
+        trace.module_audit.map((audit) => [
+          audit.module,
+          audit.algorithm,
+          `${audit.score != null ? audit.score.toFixed(3) : '—'} · ${audit.input_count} inputs`,
+        ]),
+      )),
+      section('State Transitions', reportTable(
+        ['Module / Field', 'Trigger', 'Impact'],
+        trace.state_transitions.map((transition) => [
+          `${transition.module} / ${transition.state_field}`,
+          transition.trigger,
+          transition.impact,
+        ]),
+      )),
+      section('System Notes', reportList(trace.notes)),
+    ].join('');
+  }
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FIRE KEEPER — ${escHtml(title)}</title>
+<style>
+*{box-sizing:border-box}body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;color:#172033;background:#f3f4f6;line-height:1.65;margin:0;padding:20px}
+.page{max-width:210mm;margin:auto;background:#fff;padding:22mm 18mm;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.no-print{display:flex;gap:10px;margin:0 auto 16px;max-width:210mm}.btn{border:0;border-radius:8px;padding:9px 18px;background:#f97316;color:white;font:inherit;font-weight:700;cursor:pointer}
+header{border-bottom:3px solid #f97316;padding-bottom:14px;margin-bottom:16px}h1{color:#f97316;font-size:22px;margin:0}h2{color:#c2410c;font-size:16px;border-bottom:1px solid #fed7aa;padding-bottom:5px;margin:22px 0 10px}h3{font-size:14px;color:#475569;margin:12px 0 4px}
+.meta,.question,.answer,.summary{border-radius:8px;padding:12px 14px;margin:8px 0}.meta{background:#fff7ed;border:1px solid #fed7aa;font-size:13px}.question{background:#eff6ff;border-left:4px solid #3b82f6}.answer{background:#f8fafc;border:1px solid #e2e8f0;white-space:pre-wrap}.summary{background:#fff7ed;border-left:4px solid #f97316;white-space:pre-wrap}
+table{border-collapse:collapse;width:100%;font-size:13px}.table-wrap{overflow-x:auto}th,td{border:1px solid #e2e8f0;padding:7px;vertical-align:top;text-align:left}th{background:#fff7ed;color:#9a3412}ul{margin:6px 0;padding-left:22px}.muted{color:#64748b}.footer{border-top:1px solid #e5e7eb;color:#94a3b8;font-size:11px;margin-top:28px;padding-top:10px;text-align:center}
+@media print{body{background:#fff;padding:0}.page{box-shadow:none;padding:0}.no-print{display:none!important}h2{break-after:avoid}.table-wrap{overflow:visible}}
+</style>
+</head>
+<body>
+<div class="no-print"><button class="btn" onclick="window.print()">พิมพ์ / บันทึก PDF</button></div>
+<main class="page">
+<header><h1>🔥 FIRE KEEPER OS</h1><div>${escHtml(title)}</div></header>
+<div class="meta"><strong>วันที่:</strong> ${escHtml(dateStr)} &nbsp; <strong>Intent:</strong> ${escHtml(pca.intent?.type ?? 'general')} &nbsp; <strong>Confidence:</strong> ${escHtml(confidence.band)} · ${confidence.score.toFixed(1)}/100</div>
+${body}
+<div class="footer">FIRE KEEPER OS · Human Agency Preserved — ผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้ายเสมอ</div>
+</main>
+</body>
+</html>`;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -1099,6 +1305,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [showPCA, setShowPCA] = useState(false);
   const [reportTab, setReportTab] = useState<'user' | 'analyst' | 'system'>('user');
+  const [exportReportKind, setExportReportKind] = useState<Exclude<ReportKind, 'all'>>('user');
   const reports = message.reports;
   const reportConfidence = reports?.confidence_summary ?? (
     message.pcaState?.confidence_report
@@ -1135,8 +1342,14 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const handleExportHtml = useCallback(async () => {
     if (!message.pcaState) return;
     const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
-    const html = generateHtmlReport(question, message.content, message.pcaState);
-    const filename = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
+    const html = generateHtmlReport(
+      question,
+      message.content,
+      message.pcaState,
+      exportReportKind,
+      message.reports,
+    );
+    const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
 
     if (Platform.OS === 'web') {
       downloadTextFile(html, filename, 'text/html;charset=utf-8');
@@ -1148,13 +1361,19 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         Alert.alert('บันทึกไม่สำเร็จ', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว สามารถวางในไฟล์ .html ได้ครับ');
       }
     }
-  }, [message]);
+  }, [exportReportKind, message]);
 
   const handleExportPdf = useCallback(async () => {
     if (!message.pcaState) return;
     const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
-    const html = generateHtmlReport(question, message.content, message.pcaState);
-    const filename = `FIRE_KEEPER_Report_${formatThaiFileStamp(message.pcaState.start_time)}.pdf`;
+    const html = generateHtmlReport(
+      question,
+      message.content,
+      message.pcaState,
+      exportReportKind,
+      message.reports,
+    );
+    const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.pdf`;
 
     try {
       if (Platform.OS === 'web') {
@@ -1182,7 +1401,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     } catch {
       Alert.alert('สร้าง PDF ไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง หรือใช้ปุ่ม HTML แล้วเลือกพิมพ์เป็น PDF');
     }
-  }, [message]);
+  }, [exportReportKind, message]);
 
   const handleShare = useCallback(async () => {
     const timestamp = formatThaiDateTime();
@@ -1878,20 +2097,48 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <Text style={styles.pcaMetaLabel}>บริบท: </Text>
                 {message.pcaState.understanding}
               </Text>
+              <Text style={styles.exportHeading}>แชร์รายงานแยกประเภท</Text>
+              <Text style={styles.exportHint}>เลือกประเภทรายงาน แล้วบันทึกเป็น HTML หรือ PDF</Text>
+              <View style={styles.exportTypeRow}>
+                {([
+                  ['user', '👤 User Report'],
+                  ['analyst', '🔎 Analyst Report'],
+                  ['system', '🛠 System Trace'],
+                ] as const).map(([kind, label]) => (
+                  <Pressable
+                    key={kind}
+                    onPress={() => setExportReportKind(kind)}
+                    style={[
+                      styles.exportTypeBtn,
+                      exportReportKind === kind && styles.exportTypeBtnActive,
+                    ]}
+                  >
+                    <Text style={[
+                      styles.exportTypeLabel,
+                      exportReportKind === kind && styles.exportTypeLabelActive,
+                    ]}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.exportSelected}>
+                รายงานที่เลือก: {REPORT_KIND_LABELS[exportReportKind]}
+              </Text>
               <View style={styles.exportRow}>
                 <Pressable
                   onPress={handleExportHtml}
                   style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
                 >
                   <Ionicons name="logo-html5" size={13} color="#f97316" />
-                  <Text style={styles.exportHtmlLabel}>บันทึก HTML</Text>
+                  <Text style={styles.exportHtmlLabel}>แชร์ / บันทึก HTML</Text>
                 </Pressable>
                 <Pressable
                   onPress={handleExportPdf}
                   style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
                 >
                   <Ionicons name="document-text-outline" size={13} color="#dc2626" />
-                  <Text style={styles.exportPdfLabel}>บันทึก PDF</Text>
+                  <Text style={styles.exportPdfLabel}>แชร์ / บันทึก PDF</Text>
                 </Pressable>
               </View>
             </View>
@@ -2225,6 +2472,61 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontSize: 11,
       lineHeight: 16,
       fontFamily: 'Inter_400Regular',
+    },
+    exportHeading: {
+      color: colors.foreground,
+      fontSize: 11,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+      marginTop: 8,
+    },
+    exportHint: {
+      color: colors.mutedForeground,
+      fontSize: 10,
+      lineHeight: 15,
+      fontFamily: 'Inter_400Regular',
+    },
+    exportTypeRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginTop: 3,
+    },
+    exportTypeBtn: {
+      flexGrow: 1,
+      minWidth: '30%',
+      minHeight: 32,
+      paddingHorizontal: 7,
+      paddingVertical: 6,
+      borderRadius: 7,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    exportTypeBtnActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '18',
+    },
+    exportTypeLabel: {
+      color: colors.mutedForeground,
+      fontSize: 9,
+      lineHeight: 13,
+      fontFamily: 'Inter_500Medium',
+      textAlign: 'center',
+    },
+    exportTypeLabelActive: {
+      color: colors.primary,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    exportSelected: {
+      color: colors.primary,
+      fontSize: 10,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+      marginTop: 1,
     },
     reportGroupTitle: {
       color: colors.foreground,

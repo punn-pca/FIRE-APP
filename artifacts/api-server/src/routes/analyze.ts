@@ -378,16 +378,31 @@ export interface ReportLayers {
   confidence_summary: ConfidenceSummary;
 }
 
-function buildExecutiveSummary(answer: string): string {
-  const lines = answer
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?。！？])\s+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 3);
-  const summary = (lines.length > 0 ? lines : [answer.trim()]).join(" ");
-  if (summary.length <= 240) return summary;
-  return `${summary.slice(0, 237).trimEnd()}...`;
+function buildExecutiveSummary(state: PCAState): string {
+  const parts = [state.response.trim()].filter(Boolean);
+  if (state.missing_info.length > 0) {
+    parts.push(
+      `ข้อมูลสำคัญที่ยังขาด:\n${state.missing_info.map((item) => `- ${item}`).join("\n")}`
+    );
+  }
+  if (state.conflict_findings.length > 0) {
+    parts.push(
+      `ประเด็นที่ต้องระวัง:\n${state.conflict_findings
+        .map((finding) => `- ${finding.evidence} [ความขัดแย้ง: ${finding.id}]`)
+        .join("\n")}`
+    );
+  }
+  if (state.intent.type === "decision") {
+    const selected = state.decision_matrix.options.find(
+      (option) => option.id === state.decision_matrix.selected_option
+    );
+    if (selected) {
+      parts.push(
+        `ทิศทางเบื้องต้น: ${selected.label} — ${selected.rationale}\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`
+      );
+    }
+  }
+  return parts.join("\n\n");
 }
 
 export function buildReportLayers(state: PCAState): ReportLayers {
@@ -397,7 +412,7 @@ export function buildReportLayers(state: PCAState): ReportLayers {
   return {
     user_report: {
       answer: state.response,
-      executive_summary: buildExecutiveSummary(state.response),
+      executive_summary: buildExecutiveSummary(state),
       route: state.intent,
       confidence: state.confidence,
       limitations: state.missing_info.slice(0, 3),
