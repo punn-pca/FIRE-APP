@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Pressable,
   Platform,
+  ScrollView,
   ToastAndroid,
   Alert,
 } from 'react-native';
@@ -944,10 +945,11 @@ export interface Message {
 }
 
 interface ParsedSection {
-  type: 'header' | 'text' | 'summary' | 'bullet' | 'hr';
+  type: 'header' | 'text' | 'summary' | 'table' | 'hr';
   stageNum?: number;
   title?: string;
   content: string;
+  table?: { headers: string[]; rows: string[][] };
 }
 
 function parsePCAContent(text: string): ParsedSection[] {
@@ -961,14 +963,33 @@ function parsePCAContent(text: string): ParsedSection[] {
     current = [];
   };
 
-  for (const line of lines) {
+  const parseTableRow = (line: string) =>
+    line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+  const isTableSeparator = (line: string) =>
+    /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextLine = lines[index + 1];
     const h3Match = line.match(/^###\s+(\d+)\.\s+(.*)/);
     const h3HashMatch = line.match(/^###\s+#\s+(.*)/);
     const h3Plain = line.match(/^###\s+(.*)/);
+    const markdownHeading = line.match(/^##?\s+(.*)/);
     const summaryMatch = line.match(/^\[DECISION_SUMMARY\]:\s*(.*)/);
     const hrMatch = line.match(/^[=─]{4,}/);
 
-    if (h3Match) {
+    if (line.includes('|') && nextLine && isTableSeparator(nextLine)) {
+      flushText();
+      const headers = parseTableRow(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+        rows.push(parseTableRow(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      sections.push({ type: 'table', content: '', table: { headers, rows } });
+    } else if (h3Match) {
       flushText();
       sections.push({ type: 'header', stageNum: parseInt(h3Match[1], 10), title: h3Match[2].trim(), content: '' });
     } else if (h3HashMatch) {
@@ -977,6 +998,9 @@ function parsePCAContent(text: string): ParsedSection[] {
     } else if (h3Plain && !h3Match) {
       flushText();
       sections.push({ type: 'header', title: h3Plain[1].trim(), content: '' });
+    } else if (markdownHeading) {
+      flushText();
+      sections.push({ type: 'header', title: markdownHeading[1].trim(), content: '' });
     } else if (summaryMatch) {
       flushText();
       sections.push({ type: 'summary', content: summaryMatch[1] || '' });
@@ -992,10 +1016,13 @@ function parsePCAContent(text: string): ParsedSection[] {
 }
 
 function renderInlineMarkdown(text: string, baseStyle: object, boldStyle: object) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       return <Text key={i} style={boldStyle}>{part.slice(2, -2)}</Text>;
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <Text key={i} style={boldStyle}>{part.slice(1, -1)}</Text>;
     }
     return <Text key={i} style={baseStyle}>{part}</Text>;
   });
@@ -1088,8 +1115,6 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     if (isUser) return null;
     return parsePCAContent(message.content);
   }, [message.content, isUser]);
-
-  const hasPCA = sections && sections.some((s) => s.type === 'header');
 
   const elapsedLabel =
     message.elapsedMs != null
@@ -1267,6 +1292,36 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       if (sec.type === 'hr') {
         return <View key={idx} style={styles.hr} />;
       }
+      if (sec.type === 'table' && sec.table) {
+        return (
+          <ScrollView
+            key={idx}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.tableScroll}
+            contentContainerStyle={styles.tableContent}
+          >
+            <View style={styles.table}>
+              <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                {sec.table.headers.map((cell, cellIndex) => (
+                  <Text key={`header-${cellIndex}`} style={[styles.tableCell, styles.tableHeaderCell]}>
+                    {renderInlineMarkdown(cell, styles.tableHeaderCell, styles.tableHeaderCell)}
+                  </Text>
+                ))}
+              </View>
+              {sec.table.rows.map((row, rowIndex) => (
+                <View key={`row-${rowIndex}`} style={styles.tableRow}>
+                  {sec.table!.headers.map((_, cellIndex) => (
+                    <Text key={`cell-${rowIndex}-${cellIndex}`} style={styles.tableCell}>
+                      {renderInlineMarkdown(row[cellIndex] ?? '—', styles.tableCell, styles.bold)}
+                    </Text>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        );
+      }
       if (sec.type === 'text' && sec.content) {
         const lines = sec.content.split('\n').filter(Boolean);
         return (
@@ -1317,10 +1372,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       ) : (
         <View style={styles.aiBubble}>
           {/* Content */}
-          {!hasPCA ? (
-            <Text style={styles.aiText}>{message.content}</Text>
-          ) : (
+          {sections ? (
             <View>{renderSections()}</View>
+          ) : (
+            <Text style={styles.aiText}>{message.content}</Text>
           )}
 
           {/* PCA Meta (collapsible) */}
@@ -1995,6 +2050,45 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       height: 1,
       backgroundColor: colors.border,
       marginVertical: 8,
+    },
+    tableScroll: {
+      marginVertical: 8,
+      maxWidth: '100%',
+    },
+    tableContent: {
+      paddingRight: 4,
+    },
+    table: {
+      minWidth: 320,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      overflow: 'hidden',
+    },
+    tableRow: {
+      flexDirection: 'row',
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    tableHeaderRow: {
+      borderTopWidth: 0,
+      backgroundColor: colors.muted,
+    },
+    tableCell: {
+      width: 128,
+      paddingHorizontal: 9,
+      paddingVertical: 8,
+      color: colors.foreground,
+      fontSize: 12,
+      lineHeight: 18,
+      fontFamily: 'Inter_400Regular',
+      borderRightWidth: 1,
+      borderRightColor: colors.border,
+    },
+    tableHeaderCell: {
+      color: colors.foreground,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
     },
     pcaToggle: {
       flexDirection: 'row',

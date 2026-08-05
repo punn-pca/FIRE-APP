@@ -513,6 +513,8 @@ describe("buildSystemPrompt — computed controls are injected", () => {
   assert("Prompt includes supported evidence id", prompt.includes("[หลักฐาน: evidence-knowledge]"));
   assert("Prompt excludes user input as evidence", !prompt.includes("[หลักฐาน: evidence-input]"));
   assert("Prompt includes decision output", prompt.includes("เสนอทางเลือก"));
+  assert("Prompt requires clean user formatting", prompt.includes("รูปแบบคำตอบสำหรับผู้ใช้"));
+  assert("Prompt allows Markdown comparison tables", prompt.includes("ตาราง Markdown"));
 });
 
 describe("buildDecisionMatrix — deterministic alternatives and winner", () => {

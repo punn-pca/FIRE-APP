@@ -26,3 +26,9 @@ Firekeeper OS reports are intentionally separated into User Report, Analyst Repo
 **Why:** Mixing the normal answer with audit cards made the mobile response repetitive and exposed implementation detail to users.
 
 **How to apply:** Keep the user answer fixed and readable by default, expose the two diagnostic layers on demand, and preserve the same three-layer boundaries in API responses, shares, HTML, and PDF exports.
+
+User-facing answers should be concise natural Markdown: lead with the answer, use short paragraphs and bullets, and use compact Markdown tables for comparisons; never expose PCA labels or pipeline headings in the main answer.
+
+**Why:** The underlying analysis is multi-stage, but showing its internal structure makes ordinary answers noisy and difficult to scan on mobile.
+
+**How to apply:** Keep PCA metadata in the collapsible report tabs, constrain the communication prompt to clean formatting, and render headings, lists, and horizontally scrollable tables in the answer bubble.
