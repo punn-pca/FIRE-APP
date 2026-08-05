@@ -16,7 +16,6 @@ export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
 
-
 /**
  * @summary Analyze a question through the Firekeeper PCA pipeline
  */
@@ -134,6 +133,7 @@ export const AnalyzeQuestionResponse = zod.object({
   "retrieval_score": zod.number(),
   "matched_tokens": zod.array(zod.string())
 })),
+  "storage_backend": zod.enum(['postgres', 'file_fallback']).optional(),
   "miss_reason": zod.string().optional()
 }),
   "decision_matrix": zod.object({
@@ -161,6 +161,36 @@ export const AnalyzeQuestionResponse = zod.object({
   "score": zod.number()
 })),
   "score": zod.number()
+}),
+  "reasoning_quality": zod.object({
+  "evidence_count": zod.number(),
+  "evidence_coverage": zod.number(),
+  "evidence_quality": zod.number(),
+  "memory_hits": zod.number(),
+  "hypothesis_count": zod.number(),
+  "conflict_count": zod.number(),
+  "missing_information_count": zod.number(),
+  "unsupported_claim_count": zod.number(),
+  "verification_pass_rate": zod.number(),
+  "decision_margin": zod.number()
+}),
+  "runtime_summary": zod.object({
+  "cognitive": zod.object({
+  "total_ms": zod.number(),
+  "pre_llm_ms": zod.number(),
+  "post_llm_ms": zod.number(),
+  "measured_stage_count": zod.number(),
+  "phase_count": zod.number()
+}),
+  "llm": zod.object({
+  "provider": zod.string(),
+  "model": zod.string(),
+  "request_ms": zod.number(),
+  "retry_count": zod.number(),
+  "prompt_tokens": zod.number().optional(),
+  "completion_tokens": zod.number().optional(),
+  "total_tokens": zod.number().optional()
+})
 }),
   "reasoning_graph": zod.object({
   "claims": zod.array(zod.object({

@@ -277,6 +277,33 @@ function makeVerificationState(): PCAState {
       selection_reason: "",
     },
     logical_verification: { status: "ต้องตรวจสอบ", checks: [], score: 0 },
+    reasoning_quality: {
+      evidence_count: 0,
+      evidence_coverage: 0,
+      evidence_quality: 0,
+      memory_hits: 0,
+      hypothesis_count: 0,
+      conflict_count: 0,
+      missing_information_count: 0,
+      unsupported_claim_count: 0,
+      verification_pass_rate: 0,
+      decision_margin: 0,
+    },
+    runtime_summary: {
+      cognitive: {
+        total_ms: 0,
+        pre_llm_ms: 0,
+        post_llm_ms: 0,
+        measured_stage_count: 0,
+        phase_count: 0,
+      },
+      llm: {
+        provider: "test",
+        model: "test",
+        request_ms: 0,
+        retry_count: 0,
+      },
+    },
     reasoning_graph: {
       claims: [],
       edges: [],

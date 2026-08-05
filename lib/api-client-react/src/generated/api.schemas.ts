@@ -171,6 +171,14 @@ export interface MemoryHit {
   matched_tokens: string[];
 }
 
+export type MemoryRetrievalReportStorageBackend = typeof MemoryRetrievalReportStorageBackend[keyof typeof MemoryRetrievalReportStorageBackend];
+
+
+export const MemoryRetrievalReportStorageBackend = {
+  postgres: 'postgres',
+  file_fallback: 'file_fallback',
+} as const;
+
 export interface MemoryRetrievalReport {
   query: string;
   query_tokens: string[];
@@ -179,7 +187,44 @@ export interface MemoryRetrievalReport {
   candidate_count: number;
   matched_count: number;
   hits: MemoryHit[];
+  storage_backend?: MemoryRetrievalReportStorageBackend;
   miss_reason?: string;
+}
+
+export interface ReasoningQualityMetrics {
+  evidence_count: number;
+  evidence_coverage: number;
+  evidence_quality: number;
+  memory_hits: number;
+  hypothesis_count: number;
+  conflict_count: number;
+  missing_information_count: number;
+  unsupported_claim_count: number;
+  verification_pass_rate: number;
+  decision_margin: number;
+}
+
+export interface LLMRuntime {
+  provider: string;
+  model: string;
+  request_ms: number;
+  retry_count: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+export interface CognitiveRuntime {
+  total_ms: number;
+  pre_llm_ms: number;
+  post_llm_ms: number;
+  measured_stage_count: number;
+  phase_count: number;
+}
+
+export interface RuntimeSummary {
+  cognitive: CognitiveRuntime;
+  llm: LLMRuntime;
 }
 
 export type DecisionOptionCriteria = {[key: string]: number};
@@ -333,6 +378,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_quality: ReasoningQualityMetrics;
+  runtime_summary: RuntimeSummary;
   reasoning_graph: ReasoningGraph;
   state_transitions: StateTransition[];
   verification: VerificationReport;

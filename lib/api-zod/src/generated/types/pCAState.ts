@@ -21,6 +21,8 @@ import type { PCAStateLanguage } from './pCAStateLanguage';
 import type { PCAStateRuntimeLifecycleItem } from './pCAStateRuntimeLifecycleItem';
 import type { PCAStateTraceItem } from './pCAStateTraceItem';
 import type { ReasoningGraph } from './reasoningGraph';
+import type { ReasoningQualityMetrics } from './reasoningQualityMetrics';
+import type { RuntimeSummary } from './runtimeSummary';
 import type { StateTransition } from './stateTransition';
 import type { VerificationReport } from './verificationReport';
 
@@ -42,6 +44,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_quality: ReasoningQualityMetrics;
+  runtime_summary: RuntimeSummary;
   reasoning_graph: ReasoningGraph;
   state_transitions: StateTransition[];
   verification: VerificationReport;

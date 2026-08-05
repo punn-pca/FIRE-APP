@@ -1,7 +1,7 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import { logger } from "../lib/logger";
-import { loadMemory } from "./memory";
+import { loadMemoryWithBackend, type MemoryBackend } from "./memory";
 
 const router: Router = Router();
 
@@ -116,6 +116,42 @@ export interface ModuleRuntimeMetric {
   conflict_count: number;
 }
 
+export interface ReasoningQualityMetrics {
+  evidence_count: number;
+  evidence_coverage: number;
+  evidence_quality: number;
+  memory_hits: number;
+  hypothesis_count: number;
+  conflict_count: number;
+  missing_information_count: number;
+  unsupported_claim_count: number;
+  verification_pass_rate: number;
+  decision_margin: number;
+}
+
+export interface LLMRuntime {
+  provider: string;
+  model: string;
+  request_ms: number;
+  retry_count: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+export interface CognitiveRuntime {
+  total_ms: number;
+  pre_llm_ms: number;
+  post_llm_ms: number;
+  measured_stage_count: number;
+  phase_count: number;
+}
+
+export interface RuntimeSummary {
+  cognitive: CognitiveRuntime;
+  llm: LLMRuntime;
+}
+
 export interface DataflowEdge {
   id: string;
   from: string;
@@ -142,6 +178,7 @@ export interface MemoryRetrievalReport {
   candidate_count: number;
   matched_count: number;
   hits: MemoryHit[];
+  storage_backend?: MemoryBackend;
   miss_reason?: string;
 }
 
@@ -269,6 +306,8 @@ export interface PCAState {
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
   logical_verification: LogicalVerification;
+  reasoning_quality: ReasoningQualityMetrics;
+  runtime_summary: RuntimeSummary;
   reasoning_graph: ReasoningGraph;
   state_transitions: StateTransition[];
   runtime_lifecycle: RuntimeEvent[];
@@ -754,7 +793,9 @@ export function buildVerificationReport(
 
   const score = detailed_checks.reduce((sum, check) => sum + check.score, 0) / detailed_checks.length;
   const allCoreChecksPass = detailed_checks.every((check) => check.passed);
-  const consistent = state.conflicts.length === 0;
+  // A detected conflict is not itself a verification failure. It passes when
+  // the response explicitly acknowledges every conflict for the user.
+  const consistent = state.conflicts.length === 0 || acknowledgesConflicts;
   return {
     status: allCoreChecksPass && consistent && score >= 0.8 ? "ผ่าน" : "ต้องตรวจสอบ",
     consistency: consistent ? "สอดคล้อง" : "ต้องทบทวน",
@@ -771,6 +812,95 @@ export function buildVerificationReport(
     checks,
     detailed_checks,
     score: Number(score.toFixed(3)),
+  };
+}
+
+export function buildVerifiedFallback(state: PCAState): string {
+  const evidenceText = state.evidence_report.items.length > 0
+    ? state.evidence_report.items
+      .slice(0, 3)
+      .map((item) => `- ${item.text} [หลักฐาน: ${item.id}]`)
+      .join("\n")
+    : "- ยังไม่มีหลักฐานภายนอกที่ผ่านเกณฑ์การค้นหา";
+  const selected = state.decision_matrix.options.find(
+    (option) => option.id === state.decision_matrix.selected_option
+  );
+  const conflictText = state.conflict_findings.length > 0
+    ? state.conflict_findings
+      .map((finding) => `- ${finding.evidence} [ความขัดแย้ง: ${finding.id}]`)
+      .join("\n")
+    : "- ไม่พบความขัดแย้งจากข้อมูลที่ตรวจสอบ";
+  const missingText = state.missing_info.length > 0
+    ? state.missing_info.map((missing) => `- ${missing}`).join("\n")
+    : "- ไม่พบข้อมูลสำคัญที่ขาดจากบริบทปัจจุบัน";
+  const assumptionText = state.hypotheses
+    .slice(0, 2)
+    .map((hypothesis) => `- ${hypothesis.claim}`)
+    .join("\n");
+  const optionText = state.decision_matrix.options
+    .map((option) => `- ${option.label}: คะแนน ${option.weighted_score.toFixed(3)} — ${option.rationale}`)
+    .join("\n");
+
+  return `[ข้อเท็จจริง]
+${evidenceText}
+
+[สมมติฐาน]
+${assumptionText || "- ยังไม่มีสมมติฐานเพิ่มเติม"}
+
+[ข้อมูลที่ขาด]
+${missingText}
+
+[ข้อจำกัดและความขัดแย้ง]
+${conflictText}
+
+[ทางเลือกและข้อแลกเปลี่ยน]
+${optionText}
+
+[ข้อสรุป]
+ทางเลือกที่ pipeline เลือกคือ ${selected?.label ?? state.decision_matrix.selected_option} เพราะมี weighted score ${state.decision_matrix.selected_score.toFixed(3)} ภายใต้หลักฐานและข้อจำกัดปัจจุบัน
+
+ผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย ควรตรวจสอบข้อมูลเพิ่มเติมก่อนดำเนินการในเรื่องที่มีผลกระทบสูง`;
+}
+
+export function buildReasoningQuality(state: PCAState): ReasoningQualityMetrics {
+  const checks = state.verification.detailed_checks;
+  const sortedScores = state.decision_matrix.options
+    .map((option) => option.weighted_score)
+    .sort((a, b) => b - a);
+  const decisionMargin = sortedScores.length > 1
+    ? Math.max(0, sortedScores[0] - sortedScores[1])
+    : sortedScores[0] ?? 0;
+  return {
+    evidence_count: state.evidence_report.items.length,
+    evidence_coverage: Number(state.evidence_report.coverage_score.toFixed(3)),
+    evidence_quality: Number(state.evidence_report.aggregate_score.toFixed(3)),
+    memory_hits: state.memory_retrieval.matched_count,
+    hypothesis_count: state.hypotheses.length,
+    conflict_count: state.conflict_findings.length,
+    missing_information_count: state.missing_info.length,
+    unsupported_claim_count: state.reasoning_graph.unsupported_claim_count,
+    verification_pass_rate: checks.length
+      ? Number((checks.filter((check) => check.passed).length / checks.length).toFixed(3))
+      : 0,
+    decision_margin: Number(decisionMargin.toFixed(3)),
+  };
+}
+
+export function buildRuntimeSummary(
+  state: PCAState,
+  preLlmMs: number,
+  llmRuntime: LLMRuntime
+): RuntimeSummary {
+  const cognitiveTotal = Math.max(0, state.execution_time_ms - llmRuntime.request_ms);
+  return {
+    cognitive: {
+      total_ms: Number(cognitiveTotal.toFixed(3)),
+      pre_llm_ms: Number(Math.max(0, preLlmMs).toFixed(3)),
+      post_llm_ms: Number(Math.max(0, cognitiveTotal - preLlmMs).toFixed(3)),
+      measured_stage_count: state.trace.filter((entry) => entry.measured).length,
+      phase_count: state.runtime_lifecycle.filter((event) => event.phase !== "RESPOND").length,
+    },
+    llm: llmRuntime,
   };
 }
 
@@ -1039,6 +1169,9 @@ function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]
       retrieval_score: Number((memory.retrieval_score ?? 0).toFixed(3)),
       matched_tokens: matchedTokens(state.user_input, memory.content),
     })),
+    ...(state.memory_retrieval.storage_backend
+      ? { storage_backend: state.memory_retrieval.storage_backend }
+      : {}),
     ...(state.memories.length === 0
       ? {
           miss_reason: memoryItems.length === 0
@@ -1983,6 +2116,33 @@ router.post("/", async (req, res) => {
       checks: [],
       score: 0,
     },
+    reasoning_quality: {
+      evidence_count: 0,
+      evidence_coverage: 0,
+      evidence_quality: 0,
+      memory_hits: 0,
+      hypothesis_count: 0,
+      conflict_count: 0,
+      missing_information_count: 0,
+      unsupported_claim_count: 0,
+      verification_pass_rate: 0,
+      decision_margin: 0,
+    },
+    runtime_summary: {
+      cognitive: {
+        total_ms: 0,
+        pre_llm_ms: 0,
+        post_llm_ms: 0,
+        measured_stage_count: 0,
+        phase_count: 0,
+      },
+      llm: {
+        provider: "openai",
+        model: "gpt-4o",
+        request_ms: 0,
+        retry_count: 0,
+      },
+    },
     reasoning_graph: {
       claims: [],
       edges: [],
@@ -2021,7 +2181,8 @@ router.post("/", async (req, res) => {
   };
 
   try {
-    const persistentMemories = loadMemory().map((memory) => ({
+    const memoryStore = await loadMemoryWithBackend();
+    const persistentMemories = memoryStore.items.map((memory) => ({
       content: memory.content,
       layer: memory.layer,
       source: memory.source,
@@ -2031,6 +2192,7 @@ router.post("/", async (req, res) => {
     const memoryCandidates = [...persistentMemories, ...suppliedMemories].filter((memory, index, all) =>
       all.findIndex((candidate) => candidate.content === memory.content) === index
     );
+    state.memory_retrieval.storage_backend = memoryStore.backend;
     recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0, undefined, undefined, false);
     recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0, undefined, undefined, false);
 
@@ -2141,8 +2303,27 @@ router.post("/", async (req, res) => {
       completion = await requestCompletion(failedChecks);
       responseText = completion.choices[0]?.message?.content ?? responseText;
     }
+    let postModelVerification = buildVerificationReport(state, responseText);
+    let postModelLogicalVerification = buildLogicalVerification(state, responseText);
+    let deterministicFallbackUsed = false;
+    if (postModelVerification.status !== "ผ่าน" || postModelLogicalVerification.status !== "ผ่าน") {
+      responseText = buildVerifiedFallback(state);
+      deterministicFallbackUsed = true;
+      postModelVerification = buildVerificationReport(state, responseText);
+      postModelLogicalVerification = buildLogicalVerification(state, responseText);
+      state.notes.push("Deterministic verification fallback used");
+    }
     const llmEndedAt = new Date().toISOString();
     const llmMs = Number((monotonicMs() - llmStart).toFixed(3));
+    const llmRuntime: LLMRuntime = {
+      provider: "openai",
+      model: completion.model ?? "gpt-4o",
+      request_ms: llmMs,
+      retry_count: retryCount,
+      prompt_tokens: completion.usage?.prompt_tokens,
+      completion_tokens: completion.usage?.completion_tokens,
+      total_tokens: completion.usage?.total_tokens,
+    };
     recordRuntime(
       state,
       "RESPOND",
@@ -2156,6 +2337,7 @@ router.post("/", async (req, res) => {
     state.llm_model = completion.model ?? "gpt-4o";
     state.notes.push(`LLM: openai (${state.llm_model})`);
     if (retryCount > 0) state.notes.push("Verification retry: 1");
+    if (deterministicFallbackUsed) state.notes.push("Deterministic verification fallback used");
     recordMeasured(
       state,
       "COMMUNICATION",
@@ -2232,6 +2414,23 @@ router.post("/", async (req, res) => {
     state.dataflow = buildDataflow(state);
     state.reasoning_graph = buildReasoningGraph(state);
     state.state_transitions = buildStateTransitions(state);
+    state.reasoning_quality = buildReasoningQuality(state);
+    state.runtime_summary = buildRuntimeSummary(
+      state,
+      Number((llmStart - startMono).toFixed(3)),
+      llmRuntime
+    );
+
+    // Never emit a report that claims verification when any substantive check
+    // failed. The deterministic fallback is already verified above; this is
+    // the final safety gate for unexpected model/output changes.
+    if (state.verification.status !== "ผ่าน" || state.verification.score < 1) {
+      res.status(422).json({
+        error: "Verification did not reach 100%; report was not emitted",
+        verification: state.verification,
+      });
+      return;
+    }
 
     res.json({
       response: state.response,
@@ -2254,6 +2453,8 @@ router.post("/", async (req, res) => {
         memory_retrieval: state.memory_retrieval,
         decision_matrix: state.decision_matrix,
         logical_verification: state.logical_verification,
+         reasoning_quality: state.reasoning_quality,
+         runtime_summary: state.runtime_summary,
          reasoning_graph: state.reasoning_graph,
          state_transitions: state.state_transitions,
         critique: state.critique,

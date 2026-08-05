@@ -116,6 +116,40 @@ export interface ModuleRuntimeMetric {
   conflict_count: number;
 }
 
+export interface ReasoningQualityMetrics {
+  evidence_count: number;
+  evidence_coverage: number;
+  evidence_quality: number;
+  memory_hits: number;
+  hypothesis_count: number;
+  conflict_count: number;
+  missing_information_count: number;
+  unsupported_claim_count: number;
+  verification_pass_rate: number;
+  decision_margin: number;
+}
+
+export interface LLMRuntime {
+  provider: string;
+  model: string;
+  request_ms: number;
+  retry_count: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+export interface RuntimeSummary {
+  cognitive: {
+    total_ms: number;
+    pre_llm_ms: number;
+    post_llm_ms: number;
+    measured_stage_count: number;
+    phase_count: number;
+  };
+  llm: LLMRuntime;
+}
+
 export interface DataflowEdge {
   id: string;
   from: string;
@@ -142,6 +176,7 @@ export interface MemoryRetrievalReport {
   candidate_count: number;
   matched_count: number;
   hits: MemoryHit[];
+  storage_backend?: 'postgres' | 'file_fallback';
   miss_reason?: string;
 }
 
@@ -234,6 +269,8 @@ export interface PCAState {
   memory_retrieval?: MemoryRetrievalReport;
   decision_matrix?: DecisionMatrix;
   logical_verification?: LogicalVerification;
+  reasoning_quality?: ReasoningQualityMetrics;
+  runtime_summary?: RuntimeSummary;
   reasoning_graph?: ReasoningGraph;
   state_transitions?: StateTransition[];
   runtime_lifecycle?: RuntimeEvent[];
@@ -381,6 +418,7 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
       <td>${metric.missing_info_count}</td>
       <td>${metric.conflict_count}</td>
     </tr>`).join('');
+  const quality = pca.reasoning_quality;
   const logicalVerificationItems = (pca.logical_verification?.checks ?? []).map((check) =>
     `<li><strong>${escHtml(check.criterion)}</strong> — ${check.passed ? 'ผ่าน' : 'ไม่ผ่าน'} (${check.score.toFixed(2)})<br><span class="detail">${escHtml(check.rule)}<br>${escHtml(check.evidence)}</span></li>`
   ).join('');
@@ -530,12 +568,34 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 </div>
 
 <!-- QUESTION -->
-<div class="section">
+  <div class="section">
+    <div class="sec-title">🧪 Reasoning Quality — คุณภาพเหตุผล</div>
+    <div class="score-box">
+      <span class="score-chip">evidence: ${quality?.evidence_count ?? 0}</span>
+      <span class="score-chip">coverage: ${(quality?.evidence_coverage ?? 0).toFixed(3)}</span>
+      <span class="score-chip">quality: ${(quality?.evidence_quality ?? 0).toFixed(3)}</span>
+      <span class="score-chip">conflicts: ${quality?.conflict_count ?? 0}</span>
+      <span class="score-chip">unsupported: ${quality?.unsupported_claim_count ?? 0}</span>
+    </div>
+    <div class="detail">memory hits ${quality?.memory_hits ?? 0} · hypotheses ${quality?.hypothesis_count ?? 0} · missing ${quality?.missing_information_count ?? 0} · verification pass rate ${((quality?.verification_pass_rate ?? 0) * 100).toFixed(1)}% · decision margin ${(quality?.decision_margin ?? 0).toFixed(3)}</div>
+  </div>
+
+  <div class="section">
   <div class="sec-title">❓ คำถาม / สิ่งที่วิเคราะห์</div>
   <div class="question-box">${escHtml(question)}</div>
 </div>
 
 <!-- PCA TIMELINE -->
+<div class="section">
+  <div class="sec-title">⏱ Runtime Boundary</div>
+  <div class="score-box">
+    <span class="score-chip">Cognitive: ${(pca.runtime_summary?.cognitive.total_ms ?? 0).toFixed(1)} ms</span>
+    <span class="score-chip">LLM: ${(pca.runtime_summary?.llm.request_ms ?? 0).toFixed(1)} ms</span>
+    <span class="score-chip">LLM retry: ${pca.runtime_summary?.llm.retry_count ?? 0}</span>
+  </div>
+  <div class="detail">Cognitive pre-LLM ${(pca.runtime_summary?.cognitive.pre_llm_ms ?? 0).toFixed(1)} ms · post-LLM ${(pca.runtime_summary?.cognitive.post_llm_ms ?? 0).toFixed(1)} ms · phase markers ${pca.runtime_summary?.cognitive.phase_count ?? 0}</div>
+</div>
+
 <div class="section">
   <div class="sec-title">⏱ กระบวนการ PCA — เวลาแต่ละขั้นตอน (มิลลิวินาที)</div>
   <table class="tl-table">
@@ -1073,6 +1133,31 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   ))}
                 </View>
               )}
+              {message.pcaState.reasoning_quality && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>🧪 Reasoning Quality</Text>
+                  <Text style={styles.osCardText}>
+                    evidence {message.pcaState.reasoning_quality.evidence_count} · coverage {message.pcaState.reasoning_quality.evidence_coverage.toFixed(3)} · quality {message.pcaState.reasoning_quality.evidence_quality.toFixed(3)}
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    memory hits {message.pcaState.reasoning_quality.memory_hits} · conflicts {message.pcaState.reasoning_quality.conflict_count} · missing {message.pcaState.reasoning_quality.missing_information_count}
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    unsupported {message.pcaState.reasoning_quality.unsupported_claim_count} · verification {(message.pcaState.reasoning_quality.verification_pass_rate * 100).toFixed(1)}% · margin {message.pcaState.reasoning_quality.decision_margin.toFixed(3)}
+                  </Text>
+                </View>
+              )}
+              {message.pcaState.runtime_summary && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>⏱ Runtime Boundary</Text>
+                  <Text style={styles.osCardText}>
+                    Cognitive {message.pcaState.runtime_summary.cognitive.total_ms.toFixed(1)}ms · LLM {message.pcaState.runtime_summary.llm.request_ms.toFixed(1)}ms
+                  </Text>
+                  <Text style={styles.osCardText}>
+                    pre-LLM {message.pcaState.runtime_summary.cognitive.pre_llm_ms.toFixed(1)}ms · post-LLM {message.pcaState.runtime_summary.cognitive.post_llm_ms.toFixed(1)}ms · retry {message.pcaState.runtime_summary.llm.retry_count}
+                  </Text>
+                </View>
+              )}
               {message.pcaState.module_audit && message.pcaState.module_audit.length > 0 && (
                 <View style={styles.osCard}>
                   <Text style={styles.osCardTitle}>Module Audit: {message.pcaState.module_audit.length} โมดูล</Text>
@@ -1112,7 +1197,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               {message.pcaState.memory_retrieval && (
                 <View style={styles.osCard}>
                   <Text style={styles.osCardTitle}>
-                    💾 Memory Retrieval · {message.pcaState.memory_retrieval.matched_count}/{message.pcaState.memory_retrieval.candidate_count} hits
+                    💾 Memory Retrieval · {message.pcaState.memory_retrieval.matched_count}/{message.pcaState.memory_retrieval.candidate_count} hits · {message.pcaState.memory_retrieval.storage_backend ?? 'unknown'}
                   </Text>
                   <Text style={styles.osCardText} numberOfLines={2}>
                     query tokens: {message.pcaState.memory_retrieval.query_tokens.slice(0, 12).join(', ') || 'ไม่มี token'}

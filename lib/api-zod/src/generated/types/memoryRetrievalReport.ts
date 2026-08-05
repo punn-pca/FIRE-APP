@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { MemoryHit } from './memoryHit';
+import type { MemoryRetrievalReportStorageBackend } from './memoryRetrievalReportStorageBackend';
 
 export interface MemoryRetrievalReport {
   query: string;
@@ -15,5 +16,6 @@ export interface MemoryRetrievalReport {
   candidate_count: number;
   matched_count: number;
   hits: MemoryHit[];
+  storage_backend?: MemoryRetrievalReportStorageBackend;
   miss_reason?: string;
 }

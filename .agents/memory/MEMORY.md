@@ -1,1 +1,2 @@
 - [Firekeeper OS contract](firekeeper-os-integration.md) — runtime lifecycle, governance, verification, and knowledge map are first-class analysis metadata.
+- [Memory and runtime boundaries](firekeeper-memory-runtime.md) — PostgreSQL is the memory source of truth; quality metrics and LLM/cognitive timing stay separate.

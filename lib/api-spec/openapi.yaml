@@ -205,8 +205,49 @@ components:
         candidate_count: { type: number }
         matched_count: { type: number }
         hits: { type: array, items: { $ref: "#/components/schemas/MemoryHit" } }
+        storage_backend: { type: string, enum: [postgres, file_fallback] }
         miss_reason: { type: string }
       required: [query, query_tokens, algorithm, threshold, candidate_count, matched_count, hits]
+    ReasoningQualityMetrics:
+      type: object
+      properties:
+        evidence_count: { type: number }
+        evidence_coverage: { type: number }
+        evidence_quality: { type: number }
+        memory_hits: { type: number }
+        hypothesis_count: { type: number }
+        conflict_count: { type: number }
+        missing_information_count: { type: number }
+        unsupported_claim_count: { type: number }
+        verification_pass_rate: { type: number }
+        decision_margin: { type: number }
+      required: [evidence_count, evidence_coverage, evidence_quality, memory_hits, hypothesis_count, conflict_count, missing_information_count, unsupported_claim_count, verification_pass_rate, decision_margin]
+    LLMRuntime:
+      type: object
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        request_ms: { type: number }
+        retry_count: { type: number }
+        prompt_tokens: { type: number }
+        completion_tokens: { type: number }
+        total_tokens: { type: number }
+      required: [provider, model, request_ms, retry_count]
+    CognitiveRuntime:
+      type: object
+      properties:
+        total_ms: { type: number }
+        pre_llm_ms: { type: number }
+        post_llm_ms: { type: number }
+        measured_stage_count: { type: number }
+        phase_count: { type: number }
+      required: [total_ms, pre_llm_ms, post_llm_ms, measured_stage_count, phase_count]
+    RuntimeSummary:
+      type: object
+      properties:
+        cognitive: { $ref: "#/components/schemas/CognitiveRuntime" }
+        llm: { $ref: "#/components/schemas/LLMRuntime" }
+      required: [cognitive, llm]
     DecisionOption:
       type: object
       properties:
@@ -304,6 +345,8 @@ components:
         memory_retrieval: { $ref: "#/components/schemas/MemoryRetrievalReport" }
         decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
         logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
+        reasoning_quality: { $ref: "#/components/schemas/ReasoningQualityMetrics" }
+        runtime_summary: { $ref: "#/components/schemas/RuntimeSummary" }
         reasoning_graph: { $ref: "#/components/schemas/ReasoningGraph" }
         state_transitions: { type: array, items: { $ref: "#/components/schemas/StateTransition" } }
         verification: { $ref: "#/components/schemas/VerificationReport" }
@@ -311,7 +354,7 @@ components:
         governance: { type: object, additionalProperties: true }
         knowledge_map: { type: object, additionalProperties: true }
         trace: { type: array, items: { type: object, additionalProperties: true } }
-      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_graph, state_transitions, verification]
+      required: [user_input, language, understanding, purpose, decision, confidence, conflicts, conflict_findings, missing_info, evidence_report, confidence_report, module_audit, runtime_metrics, dataflow, memory_retrieval, decision_matrix, logical_verification, reasoning_quality, runtime_summary, reasoning_graph, state_transitions, verification]
     AnalyzeResponse:
       type: object
       properties:
