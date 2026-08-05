@@ -15,7 +15,10 @@ function getOpenAI(): OpenAI {
 interface TraceEntry {
   stage: string;
   timestamp: string;
+  started_at: string;
+  ended_at: string;
   duration_ms: number;
+  measured: boolean;
   output: Record<string, unknown>;
 }
 
@@ -33,7 +36,10 @@ interface RuntimeEvent {
   phase: RuntimePhase;
   action: string;
   timestamp: string;
+  started_at: string;
+  ended_at: string;
   duration_ms: number;
+  measured: boolean;
 }
 
 interface GovernanceReport {
@@ -103,18 +109,57 @@ export function detectLanguage(text: string): "th" | "en" {
 }
 
 function record(state: PCAState, stage: string, output: Record<string, unknown>, duration_ms = 0) {
-  state.trace.push({ stage, timestamp: new Date().toISOString(), duration_ms, output });
+  const timestamp = new Date().toISOString();
+  state.trace.push({
+    stage,
+    timestamp,
+    started_at: timestamp,
+    ended_at: timestamp,
+    duration_ms,
+    measured: false,
+    output,
+  });
+}
+
+function recordMeasured(
+  state: PCAState,
+  stage: string,
+  output: Record<string, unknown>,
+  started_at: string,
+  ended_at: string,
+  duration_ms: number
+) {
+  state.trace.push({
+    stage,
+    timestamp: started_at,
+    started_at,
+    ended_at,
+    duration_ms,
+    measured: true,
+    output,
+  });
+}
+
+function monotonicMs(): number {
+  return Number(process.hrtime.bigint()) / 1_000_000;
 }
 
 /** Wraps a synchronous stage fn and stamps its wall-clock duration onto any
- *  trace entries the fn appended. */
+ *  trace entries the fn appended. Date timestamps are for display; duration
+ *  comes from a monotonic clock so fast stages are not rounded to fake 0ms. */
 function timed(state: PCAState, fn: () => void): void {
   const before = state.trace.length;
-  const t = Date.now();
+  const startedAt = new Date().toISOString();
+  const startedMono = monotonicMs();
   fn();
-  const ms = Date.now() - t;
+  const endedAt = new Date().toISOString();
+  const ms = Number((monotonicMs() - startedMono).toFixed(3));
   for (let i = before; i < state.trace.length; i++) {
+    state.trace[i].timestamp = startedAt;
+    state.trace[i].started_at = startedAt;
+    state.trace[i].ended_at = endedAt;
     state.trace[i].duration_ms = ms;
+    state.trace[i].measured = true;
   }
 }
 
@@ -122,25 +167,20 @@ function recordRuntime(
   state: PCAState,
   phase: RuntimePhase,
   action: string,
-  duration_ms: number
+  duration_ms: number,
+  started_at = new Date().toISOString(),
+  ended_at = new Date().toISOString(),
+  measured = true
 ) {
   state.runtime_lifecycle.push({
     phase,
     action,
-    timestamp: new Date().toISOString(),
+    timestamp: started_at,
+    started_at,
+    ended_at,
     duration_ms,
+    measured,
   });
-}
-
-function runRuntimePhase(
-  state: PCAState,
-  phase: RuntimePhase,
-  action: string,
-  fn: () => void
-) {
-  const started = Date.now();
-  fn();
-  recordRuntime(state, phase, action, Date.now() - started);
 }
 
 function buildGovernanceReport(
@@ -716,7 +756,7 @@ router.post("/", async (req, res) => {
   }
 
   const startTime = new Date().toISOString();
-  const startMs = Date.now();
+  const startMono = monotonicMs();
 
   const state: PCAState = {
     user_input: question.trim(),
@@ -767,38 +807,58 @@ router.post("/", async (req, res) => {
   };
 
   try {
-    recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0);
-    recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0);
+    recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0, undefined, undefined, false);
+    recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0, undefined, undefined, false);
 
     // Pre-pipeline analysis
-    const understandStart = Date.now();
-    const contextStart = Date.now();
+    const understandStartedAt = new Date().toISOString();
+    const understandStart = monotonicMs();
+    const contextStart = monotonicMs();
     const context = validateContext(question, history);          // 3
     const conflicts = detectConflicts(question, history);        // 6
-    const contextDuration = Date.now() - contextStart;
+    const contextDuration = monotonicMs() - contextStart;
 
     // Cognitive pipeline — each stage is timed independently (ms-level)
     timed(state, () => stageObservation(state));
     timed(state, () => stageUnderstanding(state));
+    const understandEndedAt = new Date().toISOString();
     recordRuntime(
       state,
       "UNDERSTAND",
       "ตรวจสอบบริบท ความขัดแย้ง สังเกต และทำความเข้าใจคำถาม",
-      Math.max(Date.now() - understandStart, contextDuration)
+      Number(Math.max(monotonicMs() - understandStart, contextDuration).toFixed(3)),
+      understandStartedAt,
+      understandEndedAt
     );
 
-    const planStart = Date.now();
+    const planStartedAt = new Date().toISOString();
+    const planStart = monotonicMs();
     timed(state, () => stagePurpose(state));
     timed(state, () => stageMemoryRetrieval(state, memories));
     timed(state, () => stageMentalModel(state));
-    recordRuntime(state, "PLAN", "กำหนดจุดประสงค์ ความจำ และแบบจำลอง", Date.now() - planStart);
+    recordRuntime(
+      state,
+      "PLAN",
+      "กำหนดจุดประสงค์ ความจำ และแบบจำลอง",
+      Number((monotonicMs() - planStart).toFixed(3)),
+      planStartedAt,
+      new Date().toISOString()
+    );
 
-    const reasonStart = Date.now();
+    const reasonStartedAt = new Date().toISOString();
+    const reasonStart = monotonicMs();
     timed(state, () => stageHypotheses(state));
     timed(state, () => stageEvidenceEvaluation(state, history));
     timed(state, () => stageCritique(state, context));
     timed(state, () => stageDecision(state, history, memories, context, conflicts));
-    recordRuntime(state, "REASON", "รวบรวมหลักฐาน สร้างแบบจำลอง และประเมินทางเลือก", Date.now() - reasonStart);
+    recordRuntime(
+      state,
+      "REASON",
+      "รวบรวมหลักฐาน สร้างแบบจำลอง และประเมินทางเลือก",
+      Number((monotonicMs() - reasonStart).toFixed(3)),
+      reasonStartedAt,
+      new Date().toISOString()
+    );
 
     state.governance = buildGovernanceReport(context, conflicts);
     state.knowledge_map = buildKnowledgeMap(state, context);
@@ -818,7 +878,8 @@ router.post("/", async (req, res) => {
       .map((t) => ({ role: t.role, content: t.content }));
 
     // LLM Communication — timed separately (async, can be seconds)
-    const llmStart = Date.now();
+    const llmStartedAt = new Date().toISOString();
+    const llmStart = monotonicMs();
     const completion = await getOpenAI().chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -829,25 +890,41 @@ router.post("/", async (req, res) => {
       max_completion_tokens: deepReasoning ? 3000 : 1800,
       temperature: 0.7,
     });
-    const llmMs = Date.now() - llmStart;
-    recordRuntime(state, "RESPOND", "สื่อสารผลวิเคราะห์ผ่าน LLM", llmMs);
+    const llmEndedAt = new Date().toISOString();
+    const llmMs = Number((monotonicMs() - llmStart).toFixed(3));
+    recordRuntime(state, "RESPOND", "สื่อสารผลวิเคราะห์ผ่าน LLM", llmMs, llmStartedAt, llmEndedAt);
 
     const responseText =
       completion.choices[0]?.message?.content ?? "ไม่สามารถประมวลผลได้ในขณะนี้";
     state.response = responseText;
     state.llm_model = completion.model ?? "gpt-4o";
     state.notes.push(`LLM: openai (${state.llm_model})`);
-    record(state, "COMMUNICATION", { response_length: responseText.length, model: state.llm_model }, llmMs);
+    recordMeasured(
+      state,
+      "COMMUNICATION",
+      { response_length: responseText.length, model: state.llm_model },
+      llmStartedAt,
+      llmEndedAt,
+      llmMs
+    );
 
-    const reflectStart = Date.now();
+    const reflectStartedAt = new Date().toISOString();
+    const reflectStart = monotonicMs();
     timed(state, () => stageReflection(state));
     timed(state, () => stageLearning(state));
     state.verification = buildVerificationReport(state, responseText);
-    recordRuntime(state, "VERIFY", "ตรวจสอบการแยกข้อมูล ความสอดคล้อง และ Human Agency", 0);
-    recordRuntime(state, "REFLECT", "สะท้อนคิดและสกัดบทเรียน", Date.now() - reflectStart);
+    recordRuntime(state, "VERIFY", "ตรวจสอบการแยกข้อมูล ความสอดคล้อง และ Human Agency", 0, undefined, undefined, false);
+    recordRuntime(
+      state,
+      "REFLECT",
+      "สะท้อนคิดและสกัดบทเรียน",
+      Number((monotonicMs() - reflectStart).toFixed(3)),
+      reflectStartedAt,
+      new Date().toISOString()
+    );
 
     state.end_time = new Date().toISOString();
-    state.execution_time_ms = Date.now() - startMs;
+    state.execution_time_ms = Number((monotonicMs() - startMono).toFixed(3));
 
     res.json({
       response: state.response,

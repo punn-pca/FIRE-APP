@@ -16,7 +16,10 @@ import { useColors } from '@/hooks/useColors';
 export interface TraceEntry {
   stage: string;
   timestamp: string;
+  started_at?: string;
+  ended_at?: string;
   duration_ms: number;
+  measured?: boolean;
   output: Record<string, unknown>;
 }
 
@@ -24,7 +27,10 @@ export interface RuntimeEvent {
   phase: string;
   action: string;
   timestamp: string;
+  started_at?: string;
+  ended_at?: string;
   duration_ms: number;
+  measured?: boolean;
 }
 
 export interface GovernanceReport {
@@ -112,8 +118,11 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
     const ms = entry.duration_ms ?? 0;
     const pct = Math.round((ms / maxMs) * 100);
     const barColor = ms >= 2000 ? '#dc2626' : ms >= 500 ? '#f59e0b' : ms >= 100 ? '#22d3ee' : '#22c55e';
-    const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`;
-    const ts = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(11, 23) : '';
+    const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(3)} ms`;
+    const ts = entry.started_at
+      ? `${new Date(entry.started_at).toISOString().slice(11, 23)}–${new Date(entry.ended_at ?? entry.started_at).toISOString().slice(11, 23)}`
+      : '';
+    const measurement = entry.measured === false ? 'phase marker' : 'runtime measured';
     return `
       <tr>
         <td class="c-num">${i + 1}</td>
@@ -121,7 +130,7 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
         <td class="c-name"><span class="name-th">${info.th}</span><br><span class="name-en">${info.en}</span></td>
         <td class="c-desc">${escHtml(info.desc)}</td>
         <td class="c-bar"><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${barColor}"></div></div></td>
-        <td class="c-ms" style="color:${barColor}">${msLabel}</td>
+        <td class="c-ms" style="color:${barColor}">${msLabel}<br><span class="measurement">${measurement}</span></td>
         <td class="c-ts">${ts}</td>
       </tr>`;
   }).join('');
@@ -134,8 +143,8 @@ function generateHtmlReport(question: string, answer: string, pca: PCAState): st
       <td class="c-num">${i + 1}</td>
       <td class="c-name"><span class="name-th">${escHtml(event.phase)}</span></td>
       <td class="c-desc">${escHtml(event.action)}</td>
-      <td class="c-ms">${event.duration_ms ?? 0} ms</td>
-      <td class="c-ts">${event.timestamp ? new Date(event.timestamp).toISOString().slice(11, 23) : ''}</td>
+      <td class="c-ms">${event.measured === false ? '—' : `${(event.duration_ms ?? 0).toFixed(3)} ms`}<br><span class="measurement">${event.measured === false ? 'phase marker' : 'runtime measured'}</span></td>
+      <td class="c-ts">${event.started_at ? `${new Date(event.started_at).toISOString().slice(11, 23)}–${new Date(event.ended_at ?? event.started_at).toISOString().slice(11, 23)}` : ''}</td>
     </tr>`).join('');
   const governanceItems = (pca.governance?.safety_checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
   const verificationItems = (pca.verification?.checks ?? []).map((c) => `<li>${escHtml(c)}</li>`).join('');
@@ -209,6 +218,7 @@ body{font-family:'Sarabun','Noto Sans Thai','Helvetica Neue',sans-serif;font-siz
 .bar-track{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden}
 .bar-fill{height:100%;border-radius:4px;transition:width .3s}
 .c-ms{text-align:right;font-family:'Courier New',monospace;font-size:9pt;font-weight:700;white-space:nowrap;min-width:72px}
+.measurement{font-family:inherit;font-size:6.5pt;font-weight:400;color:#888;white-space:nowrap}
 .c-ts{text-align:right;font-family:'Courier New',monospace;font-size:7.5pt;color:#999;white-space:nowrap;min-width:90px}
 .total-lbl{font-size:9pt}
 .total-ms{text-align:right;font-family:monospace;font-size:11pt;color:#fb923c}
@@ -653,7 +663,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               {message.pcaState.trace.map((entry, i) => {
                 const info = STAGE_INFO[entry.stage];
                 const ms = entry.duration_ms ?? 0;
-                const msLabel = ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
+                const msLabel = entry.measured === false
+                  ? 'phase'
+                  : ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(3)}ms`;
                 const dotColor = ms >= 2000 ? '#ef4444' : ms >= 500 ? '#f59e0b' : ms >= 100 ? '#22d3ee' : '#22c55e';
                 return (
                   <View key={i} style={styles.traceRow}>
@@ -661,7 +673,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                     <Text style={styles.traceStage} numberOfLines={1}>
                       {info?.icon ?? '▸'} {info?.th ?? entry.stage}
                     </Text>
-                    <Text style={[styles.traceMs, { color: dotColor }]}>{msLabel}</Text>
+                      <Text style={[styles.traceMs, { color: dotColor }]}>{msLabel}</Text>
                   </View>
                 );
               })}
@@ -677,7 +689,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                         <Text style={[styles.phaseBadgeText, { color: colors.primary }]}>{event.phase}</Text>
                       </View>
                       <Text style={styles.traceStage} numberOfLines={1}>{event.action}</Text>
-                      <Text style={styles.traceMs}>{event.duration_ms}ms</Text>
+                      <Text style={styles.traceMs}>
+                        {event.measured === false
+                          ? 'phase marker'
+                          : event.duration_ms >= 1000
+                            ? `${(event.duration_ms / 1000).toFixed(2)}s · measured`
+                            : `${event.duration_ms.toFixed(3)}ms · measured`}
+                      </Text>
                     </View>
                   ))}
                 </>
