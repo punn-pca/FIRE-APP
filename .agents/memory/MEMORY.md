@@ -2,3 +2,4 @@
 - [Memory and runtime boundaries](firekeeper-memory-runtime.md) — PostgreSQL is the memory source of truth; quality metrics and LLM/cognitive timing stay separate.
 - [Thai time and exports](firekeeper-thai-time-exports.md) — display timestamps in Asia/Bangkok and provide real HTML/PDF file export paths.
 - [Intent-aware verification](firekeeper-intent-verification.md) — route verification and zero-citation handling must follow intent and available non-user evidence.
+- [Clerk personal memory boundary](firekeeper-clerk-personal-memory.md) — authenticated API routes and user-scoped PostgreSQL memory must remain aligned.

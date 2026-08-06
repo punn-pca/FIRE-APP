@@ -1,7 +1,7 @@
 import { Router } from "express";
 import fs from "fs";
 import path from "path";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db, firekeeperMemories } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -19,10 +19,16 @@ export interface MemoryItem {
 // File-based persistent memory
 const MEMORY_FILE = path.join(process.cwd(), "memory_store.json");
 
-function loadFileMemory(): MemoryItem[] {
+function memoryFileForUser(userId: string): string {
+  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(process.cwd(), `memory_store_${safeUserId}.json`);
+}
+
+function loadFileMemory(userId = "legacy"): MemoryItem[] {
   try {
-    if (fs.existsSync(MEMORY_FILE)) {
-      const raw = fs.readFileSync(MEMORY_FILE, "utf-8");
+    const file = userId === "legacy" ? MEMORY_FILE : memoryFileForUser(userId);
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, "utf-8");
       return JSON.parse(raw);
     }
   } catch (err) {
@@ -33,9 +39,17 @@ function loadFileMemory(): MemoryItem[] {
 
 export type MemoryBackend = "postgres" | "file_fallback";
 
-export async function loadMemoryWithBackend(): Promise<{ items: MemoryItem[]; backend: MemoryBackend }> {
+export async function loadMemoryWithBackend(userId = "legacy"): Promise<{ items: MemoryItem[]; backend: MemoryBackend }> {
+  return loadMemoryForUser(userId);
+}
+
+export async function loadMemoryForUser(userId: string): Promise<{ items: MemoryItem[]; backend: MemoryBackend }> {
   try {
-    const rows = await db.select().from(firekeeperMemories).orderBy(desc(firekeeperMemories.createdAt));
+    const rows = await db
+      .select()
+      .from(firekeeperMemories)
+      .where(eq(firekeeperMemories.userId, userId))
+      .orderBy(desc(firekeeperMemories.createdAt));
     return {
       backend: "postgres",
       items: rows.map((row) => ({
@@ -49,20 +63,21 @@ export async function loadMemoryWithBackend(): Promise<{ items: MemoryItem[]; ba
     };
   } catch (err) {
     logger.error({ err }, "Failed to load PostgreSQL memory store; using file fallback");
-    return { items: loadFileMemory(), backend: "file_fallback" };
+    return { items: loadFileMemory(userId), backend: "file_fallback" };
   }
 }
 
-function saveMemory(items: MemoryItem[]): void {
+function saveMemory(items: MemoryItem[], userId = "legacy"): void {
   try {
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(items, null, 2), "utf-8");
+    const file = userId === "legacy" ? MEMORY_FILE : memoryFileForUser(userId);
+    fs.writeFileSync(file, JSON.stringify(items, null, 2), "utf-8");
   } catch (err) {
     logger.error({ err }, "Failed to save memory store");
   }
 }
 
-router.get("/", (_req, res) => {
-  loadMemoryWithBackend()
+router.get("/", (req, res) => {
+  loadMemoryForUser(req.userId!)
     .then(({ items, backend }) => res.json({ items, backend }))
     .catch((err) => res.status(500).json({ error: "memory store unavailable", detail: String(err) }));
 });
@@ -80,17 +95,18 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    await db.insert(firekeeperMemories).values({
+      await db.insert(firekeeperMemories).values({
+      userId: req.userId!,
       content,
       layer: layer ?? "project",
       source: source ?? "user_manual",
       confidence: 1,
     });
-    const result = await loadMemoryWithBackend();
+    const result = await loadMemoryForUser(req.userId!);
     res.json({ success: true, ...result });
   } catch (err) {
     logger.error({ err }, "Failed to write PostgreSQL memory store; using file fallback");
-    const items = loadFileMemory();
+    const items = loadFileMemory(req.userId!);
     const newItem: MemoryItem = {
       id: `Memory #${items.length + 1}`,
       content,
@@ -100,7 +116,7 @@ router.post("/", async (req, res) => {
       created_at: new Date().toISOString(),
     };
     items.push(newItem);
-    saveMemory(items);
+    saveMemory(items, req.userId!);
     res.json({ success: true, items, backend: "file_fallback" satisfies MemoryBackend });
   }
 });
@@ -112,25 +128,28 @@ router.delete("/", async (req, res) => {
     return;
   }
   try {
-    await db.delete(firekeeperMemories).where(eq(firekeeperMemories.content, content));
-    const result = await loadMemoryWithBackend();
+    await db.delete(firekeeperMemories).where(and(
+      eq(firekeeperMemories.userId, req.userId!),
+      eq(firekeeperMemories.content, content),
+    ));
+    const result = await loadMemoryForUser(req.userId!);
     res.json({ success: true, ...result });
   } catch (err) {
     logger.error({ err }, "Failed to delete PostgreSQL memory; using file fallback");
-    const items = loadFileMemory();
+    const items = loadFileMemory(req.userId!);
     const filtered = items.filter((i) => i.content !== content);
-    saveMemory(filtered);
+    saveMemory(filtered, req.userId!);
     res.json({ success: true, items: filtered, backend: "file_fallback" satisfies MemoryBackend });
   }
 });
 
-router.post("/clear", async (_req, res) => {
+router.post("/clear", async (req, res) => {
   try {
-    await db.delete(firekeeperMemories);
+    await db.delete(firekeeperMemories).where(eq(firekeeperMemories.userId, req.userId!));
     res.json({ success: true, items: [], backend: "postgres" satisfies MemoryBackend });
   } catch (err) {
     logger.error({ err }, "Failed to clear PostgreSQL memory; using file fallback");
-    saveMemory([]);
+    saveMemory([], req.userId!);
     res.json({ success: true, items: [], backend: "file_fallback" satisfies MemoryBackend });
   }
 });

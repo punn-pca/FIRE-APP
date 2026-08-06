@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View,
   FlatList,
@@ -7,6 +7,7 @@ import {
   Pressable,
   Platform,
   Alert,
+  TextInput,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +17,8 @@ import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { fetch } from 'expo/fetch';
+import { Redirect } from 'expo-router';
+import { useAuth, useClerk, useUser } from '@clerk/expo';
 import { useColors } from '@/hooks/useColors';
 import MessageBubble, {
   formatThaiClock,
@@ -44,6 +47,14 @@ const WELCOME: Message = {
 };
 
 type Tone = 'Formal Architect' | 'Empathetic Guide' | 'Direct Expert';
+type PersonalMemory = {
+  id: string;
+  content: string;
+  layer: string;
+  source: string;
+  confidence: number;
+  created_at: string;
+};
 
 const TONES: { value: Tone; label: string }[] = [
   { value: 'Formal Architect', label: 'ทางการ' },
@@ -56,6 +67,9 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const styles = createStyles(colors, insets);
   const listRef = useRef<FlatList>(null);
+  const { isLoaded, isSignedIn, getToken } = useAuth();
+  const { user } = useUser();
+  const { signOut } = useClerk();
 
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [isLoading, setIsLoading] = useState(false);
@@ -64,8 +78,40 @@ export default function ChatScreen() {
   const [deepReasoning, setDeepReasoning] = useState(false);
   const [showToneBar, setShowToneBar] = useState(false);
   const [isResearchLoading, setIsResearchLoading] = useState(false);
+  const [personalMemories, setPersonalMemories] = useState<PersonalMemory[]>([]);
+  const [memoryDraft, setMemoryDraft] = useState('');
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [memoryError, setMemoryError] = useState('');
 
   const API_BASE = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
+  const authHeaders = useCallback(async () => {
+    const token = await getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }, [getToken]);
+
+  const loadPersonalMemories = useCallback(async () => {
+    if (!isSignedIn) return;
+    setIsMemoryLoading(true);
+    setMemoryError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/memory`, {
+        headers: await authHeaders(),
+      });
+      if (!response.ok) throw new Error('โหลดความจำส่วนบุคคลไม่สำเร็จ');
+      const data = await response.json() as { items?: PersonalMemory[] };
+      setPersonalMemories(data.items ?? []);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : 'โหลดความจำไม่สำเร็จ');
+    } finally {
+      setIsMemoryLoading(false);
+    }
+  }, [API_BASE, authHeaders, isSignedIn]);
+
+  useEffect(() => {
+    if (showToneBar) void loadPersonalMemories();
+  }, [showToneBar, loadPersonalMemories]);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -93,7 +139,9 @@ export default function ChatScreen() {
 
         // Long-term memory is persisted by the API server and is part of
         // retrieval input, rather than an empty client-side placeholder.
-        const memoryResponse = await fetch(`${API_BASE}/api/memory`);
+        const memoryResponse = await fetch(`${API_BASE}/api/memory`, {
+          headers: await authHeaders(),
+        });
         const memoryPayload = memoryResponse.ok
           ? await memoryResponse.json() as {
               items?: Array<{
@@ -107,7 +155,7 @@ export default function ChatScreen() {
 
         const response = await fetch(`${API_BASE}/api/analyze`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
           body: JSON.stringify({
             question: text,
             tone,
@@ -163,7 +211,7 @@ export default function ChatScreen() {
         setStreamStartTime(null);
       }
     },
-    [isLoading, tone, deepReasoning, API_BASE]
+    [API_BASE, authHeaders, deepReasoning, isLoading, tone]
   );
 
   const handleClear = useCallback(() => {
@@ -185,7 +233,7 @@ export default function ChatScreen() {
     try {
       const response = await fetch(`${API_BASE}/api/analyze/research-evaluate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ seed: `gravity-2g-${Date.now()}` }),
       });
       const data = await response.json() as {
@@ -209,7 +257,73 @@ export default function ChatScreen() {
     } finally {
       setIsResearchLoading(false);
     }
-  }, [API_BASE, isLoading, isResearchLoading]);
+  }, [API_BASE, authHeaders, isLoading, isResearchLoading]);
+
+  const handleAddMemory = useCallback(async () => {
+    const content = memoryDraft.trim();
+    if (!content || isMemoryLoading) return;
+    setIsMemoryLoading(true);
+    setMemoryError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/memory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({ content, layer: 'semantic', source: 'user_manual' }),
+      });
+      if (!response.ok) throw new Error('บันทึกความจำไม่สำเร็จ');
+      const data = await response.json() as { items?: PersonalMemory[] };
+      setPersonalMemories(data.items ?? []);
+      setMemoryDraft('');
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : 'บันทึกความจำไม่สำเร็จ');
+    } finally {
+      setIsMemoryLoading(false);
+    }
+  }, [API_BASE, authHeaders, isMemoryLoading, memoryDraft]);
+
+  const handleDeleteMemory = useCallback(async (content: string) => {
+    if (isMemoryLoading) return;
+    setIsMemoryLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/memory`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({ content }),
+      });
+      if (!response.ok) throw new Error('ลบความจำไม่สำเร็จ');
+      const data = await response.json() as { items?: PersonalMemory[] };
+      setPersonalMemories(data.items ?? []);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : 'ลบความจำไม่สำเร็จ');
+    } finally {
+      setIsMemoryLoading(false);
+    }
+  }, [API_BASE, authHeaders, isMemoryLoading]);
+
+  const handleClearMemories = useCallback(() => {
+    Alert.alert('ล้างความจำส่วนบุคคล', 'ความจำที่บันทึกไว้ในบัญชีนี้จะถูกลบทั้งหมด', [
+      { text: 'ยกเลิก', style: 'cancel' },
+      {
+        text: 'ล้างทั้งหมด',
+        style: 'destructive',
+        onPress: async () => {
+          setIsMemoryLoading(true);
+          try {
+            const response = await fetch(`${API_BASE}/api/memory/clear`, {
+              method: 'POST',
+              headers: await authHeaders(),
+            });
+            if (!response.ok) throw new Error('ล้างความจำไม่สำเร็จ');
+            setPersonalMemories([]);
+          } catch (error) {
+            setMemoryError(error instanceof Error ? error.message : 'ล้างความจำไม่สำเร็จ');
+          } finally {
+            setIsMemoryLoading(false);
+          }
+        },
+      },
+    ]);
+  }, [API_BASE, authHeaders]);
 
   const handleExportAll = useCallback(async () => {
     const timestamp = formatThaiDateTime();
@@ -258,6 +372,9 @@ export default function ChatScreen() {
       Alert.alert('บันทึกไฟล์ไม่สำเร็จ', 'คัดลอกการสนทนาไปยังคลิปบอร์ดแล้วครับ');
     }
   }, [messages, tone, deepReasoning]);
+
+  if (!isLoaded) return null;
+  if (!isSignedIn) return <Redirect href={"/(auth)/sign-in" as never} />;
 
   const reversedMessages = [...messages].reverse();
 
@@ -369,6 +486,62 @@ export default function ChatScreen() {
               </Text>
             </View>
           </Pressable>
+          <View style={[styles.accountPanel, { borderColor: colors.border }]}>
+            <View style={styles.accountHeader}>
+              <View style={styles.accountCopy}>
+                <Text style={[styles.accountTitle, { color: colors.foreground }]}>
+                  {user?.primaryEmailAddress?.emailAddress ?? 'สมาชิก FIRE'}
+                </Text>
+                <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>
+                  บัญชีส่วนตัว · ความจำไม่แชร์กับสมาชิกอื่น
+                </Text>
+              </View>
+              <Pressable onPress={() => signOut()} accessibilityRole="button">
+                <Text style={[styles.signOutText, { color: colors.primary }]}>ออกจากระบบ</Text>
+              </Pressable>
+            </View>
+            <View style={styles.memoryHeading}>
+              <Text style={[styles.settingsLabel, { color: colors.foreground }]}>ความจำส่วนบุคคล</Text>
+              <Pressable onPress={handleClearMemories} disabled={isMemoryLoading}>
+                <Text style={[styles.clearMemoryText, { color: colors.mutedForeground }]}>ล้างทั้งหมด</Text>
+              </Pressable>
+            </View>
+            <View style={styles.memoryInputRow}>
+              <TextInput
+                value={memoryDraft}
+                onChangeText={setMemoryDraft}
+                placeholder="เช่น ฉันทำงานด้านการวิจัย…"
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.memoryInput, { color: colors.foreground, borderColor: colors.border }]}
+                onSubmitEditing={handleAddMemory}
+                returnKeyType="done"
+              />
+              <Pressable
+                onPress={handleAddMemory}
+                disabled={!memoryDraft.trim() || isMemoryLoading}
+                style={[styles.addMemoryButton, { backgroundColor: colors.primary }, (!memoryDraft.trim() || isMemoryLoading) && { opacity: 0.45 }]}
+              >
+                <Ionicons name="add" size={20} color="#fff" />
+              </Pressable>
+            </View>
+            {memoryError ? <Text style={styles.memoryError}>{memoryError}</Text> : null}
+            {isMemoryLoading && personalMemories.length === 0 ? (
+              <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>กำลังโหลดความจำ…</Text>
+            ) : personalMemories.length === 0 ? (
+              <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>ยังไม่มีความจำที่บันทึกไว้</Text>
+            ) : (
+              <View style={styles.memoryList}>
+                {personalMemories.slice(0, 8).map((memory) => (
+                  <View key={memory.id} style={[styles.memoryItem, { backgroundColor: colors.muted }]}>
+                    <Text style={[styles.memoryItemText, { color: colors.foreground }]} numberOfLines={2}>{memory.content}</Text>
+                    <Pressable onPress={() => handleDeleteMemory(memory.content)} hitSlop={8}>
+                      <Ionicons name="close-circle-outline" size={18} color={colors.mutedForeground} />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
         </View>
       )}
 
@@ -507,6 +680,82 @@ function createStyles(
     },
     researchButtonHint: {
       fontSize: 10,
+      fontFamily: 'Inter_400Regular',
+    },
+    accountPanel: {
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: 12,
+      gap: 12,
+    },
+    accountHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    accountCopy: { flex: 1, gap: 2 },
+    accountTitle: {
+      fontSize: 12,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    signOutText: {
+      fontSize: 11,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    memoryHeading: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    clearMemoryText: {
+      fontSize: 11,
+      fontFamily: 'Inter_400Regular',
+    },
+    memoryInputRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    memoryInput: {
+      flex: 1,
+      minHeight: 40,
+      borderWidth: 1,
+      borderRadius: 9,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      fontSize: 12,
+      fontFamily: 'Inter_400Regular',
+    },
+    addMemoryButton: {
+      width: 40,
+      height: 40,
+      borderRadius: 9,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    memoryError: {
+      color: '#dc2626',
+      fontSize: 11,
+      lineHeight: 16,
+      fontFamily: 'Inter_400Regular',
+    },
+    memoryList: { gap: 6 },
+    memoryItem: {
+      minHeight: 36,
+      borderRadius: 8,
+      paddingHorizontal: 9,
+      paddingVertical: 7,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    memoryItemText: {
+      flex: 1,
+      fontSize: 11,
+      lineHeight: 16,
       fontFamily: 'Inter_400Regular',
     },
     deepToggle: {

@@ -3090,7 +3090,7 @@ router.post("/", async (req, res) => {
   };
 
   try {
-    const memoryStore = await loadMemoryWithBackend();
+    const memoryStore = await loadMemoryWithBackend(req.userId!);
     const persistentMemories = memoryStore.items.map((memory) => ({
       content: memory.content,
       layer: memory.layer,
