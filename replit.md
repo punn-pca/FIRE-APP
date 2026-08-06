@@ -1,15 +1,17 @@
-# [Project name]
+# FIRE KEEPER OS
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+ระบบสนทนาและ research evaluation สำหรับตรวจสอบคำตอบ หลักฐาน reasoning trace ความมั่นใจ และความสอดคล้องของ AI อย่างโปร่งใส
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the Express API server on `PORT`
+- `pnpm --filter @workspace/fire-keeper run dev` — run the Expo mobile/web app
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/api-server exec tsx src/__tests__/regression.ts` — run PCA and Research Evaluation regressions
+- Required env: `DATABASE_URL`, `OPENAI_API_KEY`, `SESSION_SECRET`, and `PORT`
 
 ## Stack
 
@@ -22,24 +24,40 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/src/routes/analyze.ts` — PCA pipeline, report layers, Truth Engine and Research Evaluation
+- `artifacts/fire-keeper/app/index.tsx` — chat screen, API calls and research evaluation action
+- `artifacts/fire-keeper/components/MessageBubble.tsx` — answer rendering, report tabs and HTML/PDF export
+- `lib/db/src/schema/` — PostgreSQL/Drizzle schema
+- `screenshots/` — real app screenshots used in documentation
+- `README.md` — setup, API overview and project capabilities
+- `CONTRIBUTING.md` — contribution and verification rules
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The normal user answer is fixed before audit; audit does not rewrite, retry, or block it.
+- PostgreSQL is the source of truth for persistent memory.
+- User Report, Analyst Report and System Trace are separate report layers.
+- Research Evaluation compares answer content with generated Truth Engine output; model self-labels are evaluated separately as Explanation Consistency.
+- Structured audit traces are exposed instead of private model chain-of-thought.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+FIRE KEEPER OS supports Thai/English conversations, evidence and confidence analysis, verification gates, memory retrieval, report export, and an opt-in Research Evaluation mode that generates synthetic worlds, ground truth, plausibility traps and counterfactual tests.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Display timestamps in `Asia/Bangkok`.
+- Preserve the separation between normal answers and audit metadata.
+- Prefer complete, inspectable reports over short excerpts.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- `PORT` is required by the API server; do not hardcode a port in application code.
+- Do not commit `.env` or credentials; use Replit Secrets for workspace/deployment secrets.
+- API and Expo workflows must be restarted after source, package, or run-command changes.
+- When report fields change, update API types, Expo rendering, exports and regression tests together.
 
 ## Pointers
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- See `README.md` for setup and product overview.
+- See `CONTRIBUTING.md` for development and review rules.
