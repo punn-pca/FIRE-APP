@@ -86,12 +86,14 @@ export default function ChatScreen() {
   const [memoryError, setMemoryError] = useState('');
 
   const API_BASE = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
   const authHeaders = useCallback(async () => {
-    const token = await getToken();
+    const token = await getTokenRef.current();
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     return headers;
-  }, [getToken]);
+  }, []);
 
   const loadPersonalMemories = useCallback(async () => {
     if (!isSignedIn) return;

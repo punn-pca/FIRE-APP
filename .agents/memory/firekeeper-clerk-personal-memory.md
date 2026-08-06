@@ -14,3 +14,9 @@ Development schema changes for the memory user boundary are applied with Drizzle
 **Why:** Replit manages production database schema updates during Publish, so startup-time or custom production DDL would create an unsafe split between development and production.
 
 **How to apply:** Push only to development while building, then inspect and confirm the `user_id` schema diff during Publish before enabling the feature in production.
+
+When Expo personal-memory effects depend on Clerk's token getter, keep the auth-header callback stable and read the latest getter through a ref; otherwise memory loading can re-run on every state update.
+
+**Why:** Clerk can provide a new getter function identity across renders. Including it in the memory-loading effect callback caused repeated `/api/memory` requests and React's maximum update-depth error.
+
+**How to apply:** Keep `authHeaders` stable for effects and use the current Clerk getter via ref; continue to scope every request with the bearer token and authenticated user ID.
