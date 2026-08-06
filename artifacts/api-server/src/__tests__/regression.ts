@@ -1,5 +1,5 @@
 /**
- * FIRE KEEPER — Regression Test Suite (item 10)
+ * FIRE — Regression Test Suite
  *
  * Tests pure pipeline functions to guard against context-loss regressions.
  * Run with: pnpm --filter @workspace/api-server exec tsx src/__tests__/regression.ts

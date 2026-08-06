@@ -1,10 +1,10 @@
-# FIRE KEEPER OS
+# FIRE — Framework for Inference, Reasoning & Evaluation
 
-FIRE KEEPER OS คือแอป Expo และ API สำหรับการวิเคราะห์คำถามอย่างโปร่งใส โดยแยกคำตอบสำหรับผู้ใช้ออกจากหลักฐาน, สมมติฐาน, reasoning trace, verification และ system trace
+FIRE คือแอป Expo และ API สำหรับการวิเคราะห์คำถามอย่างโปร่งใส โดยแยกคำตอบสำหรับผู้ใช้ออกจากหลักฐาน, สมมติฐาน, reasoning trace, verification และ system trace
 
 โปรเจกต์นี้มีสองส่วนหลัก:
 
-- **FIRE KEEPER mobile/web app** — อินเทอร์เฟซสนทนาที่สร้างด้วย Expo และ React Native Web
+- **FIRE mobile/web app** — อินเทอร์เฟซสนทนาที่สร้างด้วย Expo และ React Native Web
 - **API server** — Express API ที่รัน PCA pipeline, persistent memory, report layers และ Research Evaluation Framework
 
 ## ความสามารถหลัก
@@ -30,7 +30,7 @@ FIRE KEEPER OS คือแอป Expo และ API สำหรับการ
 
 ## ภาพตัวอย่าง
 
-![FIRE KEEPER mobile interface](screenshots/firekeeper-final-mobile.jpg)
+![FIRE mobile interface](screenshots/firekeeper-final-mobile.jpg)
 
 ภาพนี้เป็น screenshot จากแอปจริงบน mobile viewport
 

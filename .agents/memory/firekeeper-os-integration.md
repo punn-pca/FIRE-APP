@@ -1,9 +1,9 @@
 ---
-name: Firekeeper OS integration
-description: Durable rules for keeping the Firekeeper OS specification aligned with analysis behavior.
+name: FIRE framework integration
+description: Durable rules for keeping the FIRE analysis framework aligned with product behavior.
 ---
 
-Firekeeper OS metadata is part of every analysis contract: the runtime lifecycle, governance/safety result, verification result, and fact/assumption/unknown knowledge map must be computed from the request and response, then exposed to the client and printable report.
+FIRE metadata is part of every analysis contract: the runtime lifecycle, governance/safety result, verification result, and fact/assumption/unknown knowledge map must be computed from the request and response, then exposed to the client and printable report.
 
 **Why:** The uploaded Phoenix specification defines Firekeeper as a cognitive operating system rather than a chatbot, with explicit lifecycle, governance, verification, memory, and human-agency boundaries. Keeping these as structured metadata prevents the product from regressing into opaque prompt-only behavior.
 

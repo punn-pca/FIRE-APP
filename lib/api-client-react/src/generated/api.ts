@@ -137,7 +137,7 @@ export const getAnalyzeQuestionUrl = () => {
 }
 
 /**
- * @summary Analyze a question through the Firekeeper PCA pipeline
+ * @summary Analyze a question through the FIRE Framework pipeline
  */
 export const analyzeQuestion = async (analyzeRequest: AnalyzeRequest, options?: RequestInit): Promise<AnalyzeResponse> => {
 
@@ -186,7 +186,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type AnalyzeQuestionMutationError = ErrorType<void>
 
     /**
- * @summary Analyze a question through the Firekeeper PCA pipeline
+ * @summary Analyze a question through the FIRE Framework pipeline
  */
 export const useAnalyzeQuestion = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof analyzeQuestion>>, TError,{data: BodyType<AnalyzeRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}

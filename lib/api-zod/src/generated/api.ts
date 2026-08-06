@@ -18,7 +18,7 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * @summary Analyze a question through the Firekeeper PCA pipeline
+ * @summary Analyze a question through the FIRE Framework pipeline
  */
 
 export const analyzeQuestionBodyMemoriesItemConfidenceMin = 0;

@@ -39,7 +39,7 @@ const WELCOME: Message = {
   id: 'welcome',
   role: 'assistant',
   content:
-    'สวัสดีครับ ผมคือ FIRE KEEPER ระบบประมวลผลปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)\n\nพร้อมช่วยวิเคราะห์และประเมินทางเลือกเชิงยุทธศาสตร์อย่างโปร่งใส โดยรักษาเสรีภาพในการตัดสินใจของคุณ (Human Agency)\n\nกด 📤 เพื่อแชร์ หรือ 📋 เพื่อคัดลอกคำตอบออกไปได้เลยครับ',
+    'สวัสดีครับ ผมคือ FIRE — Framework for Inference, Reasoning & Evaluation ระบบวิเคราะห์ปัญญาประดิษฐ์อย่างโปร่งใส\n\nพร้อมช่วยวิเคราะห์หลักฐาน เหตุผล และประเมินทางเลือกเชิงยุทธศาสตร์ โดยรักษาเสรีภาพในการตัดสินใจของคุณ (Human Agency)\n\nกด 📤 เพื่อแชร์ หรือ 📋 เพื่อคัดลอกคำตอบออกไปได้เลยครับ',
   timestamp: new Date().toISOString(),
 };
 
@@ -213,12 +213,12 @@ export default function ChatScreen() {
 
   const handleExportAll = useCallback(async () => {
     const timestamp = formatThaiDateTime();
-    let content = `=== FIRE KEEPER — PUNN PCA Session Export ===\nวันที่ส่งออก (เวลาไทย): ${timestamp}\n`;
+    let content = `=== FIRE — Framework for Inference, Reasoning & Evaluation ===\nวันที่ส่งออก (เวลาไทย): ${timestamp}\n`;
     content += `โทน: ${tone} | Deep Reasoning: ${deepReasoning ? 'เปิด' : 'ปิด'}\n`;
     content += `${'═'.repeat(60)}\n\n`;
 
     messages.forEach((msg) => {
-      const role = msg.role === 'user' ? '👤 ผู้ใช้' : '🔥 FIRE KEEPER';
+      const role = msg.role === 'user' ? '👤 ผู้ใช้' : '🔥 FIRE';
       const time = msg.timestamp
         ? formatThaiClock(msg.timestamp)
         : '';
@@ -226,7 +226,7 @@ export default function ChatScreen() {
     });
 
     try {
-      const filename = `FIRE_KEEPER_Session_${formatThaiFileStamp()}.txt`;
+      const filename = `FIRE_Session_${formatThaiFileStamp()}.txt`;
       if (Platform.OS === 'web') {
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
@@ -270,9 +270,9 @@ export default function ChatScreen() {
             <Ionicons name="flame" size={22} color={colors.primary} />
           </View>
           <View>
-            <Text style={[styles.headerTitle, { color: colors.foreground }]}>FIRE KEEPER</Text>
+            <Text style={[styles.headerTitle, { color: colors.foreground }]}>FIRE</Text>
             <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
-              PCA · {tone === 'Formal Architect' ? 'ทางการ' : tone === 'Empathetic Guide' ? 'เป็นกันเอง' : 'กระชับ'}
+              Framework for Inference, Reasoning & Evaluation · {tone === 'Formal Architect' ? 'ทางการ' : tone === 'Empathetic Guide' ? 'เป็นกันเอง' : 'กระชับ'}
               {deepReasoning ? ' · Deep' : ''}
             </Text>
           </View>

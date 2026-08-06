@@ -13,7 +13,7 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 
-const SYSTEM_PROMPT = `คุณคือ FIRE KEEPER ระบบประมวลผลปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) ที่ถูกออกแบบมาเพื่อให้คำแนะนำเชิงยุทธศาสตร์อย่างเป็นระบบ
+const SYSTEM_PROMPT = `คุณคือ FIRE — Framework for Inference, Reasoning & Evaluation ระบบประมวลผลปัญญาประดิษฐ์ที่ถูกออกแบบมาเพื่อวิเคราะห์หลักฐานและเหตุผลอย่างเป็นระบบ
 
 กรอบการทำงาน PUNN Cognitive Architecture (PCA):
 

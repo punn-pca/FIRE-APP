@@ -11,7 +11,7 @@ tags:
   - name: health
     description: Health operations
   - name: analyze
-    description: Firekeeper cognitive analysis
+    description: FIRE Framework cognitive analysis
 paths:
   /healthz:
     get:
@@ -30,7 +30,7 @@ paths:
     post:
       operationId: analyzeQuestion
       tags: [analyze]
-      summary: Analyze a question through the Firekeeper PCA pipeline
+      summary: Analyze a question through the FIRE Framework pipeline
       requestBody:
         required: true
         content:

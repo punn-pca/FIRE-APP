@@ -1,6 +1,6 @@
-# Contributing to FIRE KEEPER OS
+# Contributing to FIRE
 
-ขอบคุณที่สนใจช่วยพัฒนา FIRE KEEPER OS โปรเจกต์นี้มีทั้ง Expo app, Express API, PostgreSQL/Drizzle และ evaluation pipeline ดังนั้นการเปลี่ยนแปลงควรระบุให้ชัดว่ากระทบส่วนใด
+ขอบคุณที่สนใจช่วยพัฒนา FIRE — Framework for Inference, Reasoning & Evaluation โปรเจกต์นี้มีทั้ง Expo app, Express API, PostgreSQL/Drizzle และ evaluation pipeline ดังนั้นการเปลี่ยนแปลงควรระบุให้ชัดว่ากระทบส่วนใด
 
 ## ก่อนเริ่ม
 

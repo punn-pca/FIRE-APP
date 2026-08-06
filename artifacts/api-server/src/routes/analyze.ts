@@ -1437,7 +1437,7 @@ export function buildWorkingMemory(history: ConversationTurn[], lang: "th" | "en
     .map((t) => {
       const role = t.role === "user"
         ? (lang === "th" ? "ผู้ใช้" : "User")
-        : "FIRE KEEPER";
+        : "FIRE";
       return `${role}: ${t.content.slice(0, 300)}${t.content.length > 300 ? "…" : ""}`;
     })
     .join("\n---\n");
@@ -1757,7 +1757,7 @@ function stageMemoryRetrieval(state: PCAState, memoryItems: PCAState["memories"]
 function stageMentalModel(state: PCAState) {
   record(state, "MENTAL_MODEL", {
     model: "PCA 12-Stage Cognitive Pipeline",
-    framework: "PUNN FIRE (Fact · Inference · Risk · Evidence)",
+    framework: "FIRE Framework (Inference · Reasoning · Evaluation)",
   });
 }
 
@@ -2588,7 +2588,7 @@ ${state.conflict_findings.map((finding) =>
   // Internal PCA controls are audited after the user-facing answer is selected.
   const coreRules = `
 กฎสำคัญ (บังคับทุกข้อ):
-  - Firekeeper OS lifecycle: Understand → Plan → Reason → Respond → Reflect → Audit
+  - FIRE lifecycle: Understand → Plan → Reason → Respond → Reflect → Audit
  - Governance gate: Truth before certainty, Evidence before opinion, Human agency before automation
 - ตอบเป็นภาษาไทยเป็นหลัก ห้ามใช้ภาษาจีน
  - ห้ามตัดสินใจแทนผู้ใช้
@@ -2623,7 +2623,7 @@ ${state.conflict_findings.map((finding) =>
           : `สำหรับคำถามทั่วไป: ตอบตามข้อมูลที่รองรับ โดยไม่สมมติว่าเป็นการตัดสินใจ`;
 
   if (deepReasoning) {
-    return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
+    return `คุณคือ FIRE — Framework for Inference, Reasoning & Evaluation ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA) — Full Deep Analysis Mode
 
 ${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}${evidenceSection}${decisionSection}${conflictSection}
 ${coreRules}
@@ -2639,14 +2639,14 @@ ${routeStructure}
   ตอบคำถามโดยตรงตามรูปแบบด้านบน ใช้ข้อมูลจากการวิเคราะห์เป็นพื้นหลัง แต่ห้ามเปิดเผยรายงาน PCA ภายใน`;
   }
 
-  return `คุณคือ FIRE KEEPER ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)
+  return `คุณคือ FIRE — Framework for Inference, Reasoning & Evaluation ระบบวิเคราะห์ปัญญาประดิษฐ์ตามกรอบ PUNN Cognitive Architecture (PCA)
 
 ${toneInstruction}${historySection}${memorySection}${personalCtx}${contextWarning}${conflictWarning}${evidenceSection}${decisionSection}${conflictSection}
 ${coreRules}
 ${formattingRules}
 ${routeStructure}
 
-กรอบการวิเคราะห์ PUNN FIRE:
+กรอบการวิเคราะห์ FIRE:
 - Fact First: ใช้ข้อเท็จจริงและหลักฐานที่รองรับก่อนการตีความ
 - Inference-based Reasoning: ใช้เหตุผลจากหลักฐาน
 - Risk & Reflection: ประเมินความเสี่ยงและข้อจำกัด
@@ -2762,7 +2762,7 @@ export function buildResearchScenario(seed = "gravity-2g-v1"): {
   const baselineWeight = Number((massKg * baselineGravity).toFixed(2));
   const world: ResearchWorld = {
     id: `${seed}-world`,
-    generator: "Firekeeper World Generator v1 · deterministic synthetic physics",
+    generator: "FIRE World Generator v1 · deterministic synthetic physics",
     parameters: {
       baseline_gravity_g: baselineGravity,
       gravity_ratio: gravityRatio,
@@ -3102,7 +3102,7 @@ router.post("/", async (req, res) => {
       all.findIndex((candidate) => candidate.content === memory.content) === index
     );
     state.memory_retrieval.storage_backend = memoryStore.backend;
-    recordRuntime(state, "BOOT", "เริ่มต้น Firekeeper OS runtime", 0, undefined, undefined, false);
+    recordRuntime(state, "BOOT", "เริ่มต้น FIRE runtime", 0, undefined, undefined, false);
     recordRuntime(state, "READY", "ตรวจสอบคำขอและเตรียมบริบท", 0, undefined, undefined, false);
 
     // Pre-pipeline analysis

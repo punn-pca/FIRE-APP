@@ -1,4 +1,4 @@
-# FIRE KEEPER OS
+# FIRE — Framework for Inference, Reasoning & Evaluation
 
 ระบบสนทนาและ research evaluation สำหรับตรวจสอบคำตอบ หลักฐาน reasoning trace ความมั่นใจ และความสอดคล้องของ AI อย่างโปร่งใส
 
@@ -42,7 +42,7 @@
 
 ## Product
 
-FIRE KEEPER OS supports Thai/English conversations, evidence and confidence analysis, verification gates, memory retrieval, report export, and an opt-in Research Evaluation mode that generates synthetic worlds, ground truth, plausibility traps and counterfactual tests.
+FIRE supports Thai/English conversations, evidence and confidence analysis, verification gates, memory retrieval, report export, and an opt-in Research Evaluation mode that generates synthetic worlds, ground truth, plausibility traps and counterfactual tests.
 
 ## User preferences
 
