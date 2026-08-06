@@ -269,7 +269,7 @@ export default function ChatScreen() {
           <View style={[styles.fireIcon, { backgroundColor: colors.primary + '22' }]}>
             <Ionicons name="flame" size={22} color={colors.primary} />
           </View>
-          <View>
+          <View style={styles.headerCopy}>
             <Text style={[styles.headerTitle, { color: colors.foreground }]}>FIRE</Text>
             <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
               Framework for Inference, Reasoning & Evaluation · {tone === 'Formal Architect' ? 'ทางการ' : tone === 'Empathetic Guide' ? 'เป็นกันเอง' : 'กระชับ'}
@@ -418,7 +418,14 @@ function createStyles(
       borderBottomColor: colors.border,
       ...(Platform.OS === 'web' ? { paddingTop: 67 } : {}),
     },
-    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    headerLeft: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    headerCopy: { flex: 1, minWidth: 0 },
     fireIcon: {
       width: 40,
       height: 40,
@@ -433,11 +440,18 @@ function createStyles(
       letterSpacing: 0.5,
     },
     headerSub: {
-      fontSize: 11,
+      flexShrink: 1,
+      fontSize: 10,
+      lineHeight: 14,
       fontFamily: 'Inter_400Regular',
       marginTop: 1,
     },
-    headerActions: { flexDirection: 'row', gap: 4 },
+    headerActions: {
+      flexShrink: 0,
+      flexDirection: 'row',
+      gap: 4,
+      marginLeft: 8,
+    },
     iconBtn: {
       width: 36,
       height: 36,
