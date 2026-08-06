@@ -50,3 +50,9 @@ Export actions must be rendered beside the user-facing answer whenever report la
 **Why:** The API returns `reports` for normal successful answers, so a condition that renders export controls only when reports are absent hides the controls in the common path.
 
 **How to apply:** Keep report inspection collapsible, but place HTML/PDF actions and the three report-type selector in the visible answer footer. On web, HTML downloads directly and PDF opens the selected report in the browser print flow for “Save as PDF”; native uses Expo Print and Sharing.
+
+Keep normal and legacy report export controls on one renderer, and preserve the specific popup-blocked error instead of replacing it with a generic PDF failure.
+
+**Why:** The two data shapes need different placement, but duplicated controls drifted in labels and accessibility behavior; popup blocking is actionable only when the user is told to allow pop-ups.
+
+**How to apply:** Call the shared renderer from the visible `reports` path and the legacy PCA metadata path. Wrap web HTML/PDF actions so popup errors explain the browser setting while native HTML retains its clipboard recovery.

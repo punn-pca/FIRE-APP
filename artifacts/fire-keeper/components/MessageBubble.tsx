@@ -1358,41 +1358,54 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
   const handleExportHtml = useCallback(async () => {
     if (!message.pcaState) return;
-    const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
-    const html = generateHtmlReport(
-      question,
-      message.content,
-      message.pcaState,
-      exportReportKind,
-      message.reports,
-    );
-    const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
+    try {
+      const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
+      const html = generateHtmlReport(
+        question,
+        message.content,
+        message.pcaState,
+        exportReportKind,
+        message.reports,
+      );
+      const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.html`;
 
-    if (Platform.OS === 'web') {
-      downloadTextFile(html, filename, 'text/html;charset=utf-8');
-    } else {
-      try {
+      if (Platform.OS === 'web') {
+        downloadTextFile(html, filename, 'text/html;charset=utf-8');
+      } else {
         await shareAsFile(html, filename);
-      } catch {
+      }
+    } catch (error) {
+      if (Platform.OS !== 'web' && message.pcaState) {
+        const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
+        const html = generateHtmlReport(
+          question,
+          message.content,
+          message.pcaState,
+          exportReportKind,
+          message.reports,
+        );
         await Clipboard.setStringAsync(html);
         Alert.alert('บันทึกไม่สำเร็จ', 'คัดลอก HTML ไปยังคลิปบอร์ดแล้ว สามารถวางในไฟล์ .html ได้ครับ');
+        return;
       }
+      const detail = error instanceof Error ? error.message : 'ไม่ทราบสาเหตุ';
+      Alert.alert('ดาวน์โหลด HTML ไม่สำเร็จ', detail);
     }
   }, [exportReportKind, message]);
 
   const handleExportPdf = useCallback(async () => {
     if (!message.pcaState) return;
-    const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
-    const html = generateHtmlReport(
-      question,
-      message.content,
-      message.pcaState,
-      exportReportKind,
-      message.reports,
-    );
-    const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.pdf`;
-
     try {
+      const question = message.pcaState.user_input ?? message.pcaState.observations[0] ?? '';
+      const html = generateHtmlReport(
+        question,
+        message.content,
+        message.pcaState,
+        exportReportKind,
+        message.reports,
+      );
+      const filename = `FIRE_KEEPER_${exportReportKind.toUpperCase()}_${formatThaiFileStamp(message.pcaState.start_time)}.pdf`;
+
       if (Platform.OS === 'web') {
         openHtmlForPrint(html, `FIRE KEEPER — ${REPORT_KIND_LABELS[exportReportKind]}`);
         return;
@@ -1415,10 +1428,78 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         dialogTitle: filename,
         mimeType: 'application/pdf',
       });
-    } catch {
-      Alert.alert('สร้าง PDF ไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง หรือใช้ปุ่ม HTML แล้วเลือกพิมพ์เป็น PDF');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      if (Platform.OS === 'web' && detail.includes('บล็อกหน้าต่าง')) {
+        Alert.alert(
+          'เปิดหน้าต่าง PDF ไม่สำเร็จ',
+          'เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาต pop-up สำหรับแอปนี้ แล้วกด “บันทึก PDF” อีกครั้ง',
+        );
+        return;
+      }
+      Alert.alert(
+        'สร้าง PDF ไม่สำเร็จ',
+        Platform.OS === 'web'
+          ? 'กรุณาลองใหม่อีกครั้ง หากไม่เห็นหน้าต่างพิมพ์ ให้ตรวจสอบการอนุญาต pop-up ของเบราว์เซอร์'
+          : 'กรุณาลองใหม่อีกครั้ง หรือใช้ปุ่ม HTML แล้วเลือกพิมพ์เป็น PDF',
+      );
     }
   }, [exportReportKind, message]);
+
+  const renderExportControls = (legacy = false) => (
+    <View style={styles.reportExportPanel}>
+      <Text style={styles.exportHeading}>แชร์ / บันทึกรายงาน</Text>
+      <Text style={styles.exportHint}>
+        เลือกประเภทรายงาน แล้วดาวน์โหลด HTML หรือเลือก Save as PDF
+      </Text>
+      <View style={styles.exportTypeRow}>
+        {([
+          ['user', '👤 User Report'],
+          ['analyst', '🔎 Analyst Report'],
+          ['system', '🛠 System Trace'],
+        ] as const).map(([kind, label]) => (
+          <Pressable
+            key={`${legacy ? 'legacy' : 'answer'}-export-${kind}`}
+            onPress={() => setExportReportKind(kind)}
+            style={[
+              styles.exportTypeBtn,
+              exportReportKind === kind && styles.exportTypeBtnActive,
+            ]}
+          >
+            <Text style={[
+              styles.exportTypeLabel,
+              exportReportKind === kind && styles.exportTypeLabelActive,
+            ]}>
+              {label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.exportSelected}>
+        รายงานที่เลือก: {REPORT_KIND_LABELS[exportReportKind]}
+      </Text>
+      <View style={styles.exportRow}>
+        <Pressable
+          onPress={handleExportHtml}
+          style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`ดาวน์โหลด HTML — ${REPORT_KIND_LABELS[exportReportKind]}`}
+        >
+          <Ionicons name="logo-html5" size={13} color="#f97316" />
+          <Text style={styles.exportHtmlLabel}>ดาวน์โหลด HTML</Text>
+        </Pressable>
+        <Pressable
+          onPress={handleExportPdf}
+          style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`เปิดตัวเลือกบันทึก PDF — ${REPORT_KIND_LABELS[exportReportKind]}`}
+        >
+          <Ionicons name="document-text-outline" size={13} color="#dc2626" />
+          <Text style={styles.exportPdfLabel}>บันทึก PDF</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 
   const handleShare = useCallback(async () => {
     const timestamp = formatThaiDateTime();
@@ -1614,60 +1695,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             <Text style={styles.aiText}>{message.content}</Text>
           )}
 
-          {message.pcaState && reports && (
-            <View style={styles.reportExportPanel}>
-              <Text style={styles.exportHeading}>แชร์ / บันทึกรายงาน</Text>
-              <Text style={styles.exportHint}>
-                เลือกประเภทรายงาน แล้วดาวน์โหลด HTML หรือเลือก Save as PDF
-              </Text>
-              <View style={styles.exportTypeRow}>
-                {([
-                  ['user', '👤 User Report'],
-                  ['analyst', '🔎 Analyst Report'],
-                  ['system', '🛠 System Trace'],
-                ] as const).map(([kind, label]) => (
-                  <Pressable
-                    key={`answer-export-${kind}`}
-                    onPress={() => setExportReportKind(kind)}
-                    style={[
-                      styles.exportTypeBtn,
-                      exportReportKind === kind && styles.exportTypeBtnActive,
-                    ]}
-                  >
-                    <Text style={[
-                      styles.exportTypeLabel,
-                      exportReportKind === kind && styles.exportTypeLabelActive,
-                    ]}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.exportSelected}>
-                รายงานที่เลือก: {REPORT_KIND_LABELS[exportReportKind]}
-              </Text>
-              <View style={styles.exportRow}>
-                <Pressable
-                  onPress={handleExportHtml}
-                  style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`ดาวน์โหลด HTML — ${REPORT_KIND_LABELS[exportReportKind]}`}
-                >
-                  <Ionicons name="logo-html5" size={13} color="#f97316" />
-                  <Text style={styles.exportHtmlLabel}>ดาวน์โหลด HTML</Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleExportPdf}
-                  style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`เปิดตัวเลือกบันทึก PDF — ${REPORT_KIND_LABELS[exportReportKind]}`}
-                >
-                  <Ionicons name="document-text-outline" size={13} color="#dc2626" />
-                  <Text style={styles.exportPdfLabel}>บันทึก PDF</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
+          {message.pcaState && reports && renderExportControls()}
 
           {/* PCA Meta (collapsible) */}
           {message.pcaState && (
@@ -2170,50 +2198,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 <Text style={styles.pcaMetaLabel}>บริบท: </Text>
                 {message.pcaState.understanding}
               </Text>
-              <Text style={styles.exportHeading}>แชร์รายงานแยกประเภท</Text>
-              <Text style={styles.exportHint}>เลือกประเภทรายงาน แล้วบันทึกเป็น HTML หรือ PDF</Text>
-              <View style={styles.exportTypeRow}>
-                {([
-                  ['user', '👤 User Report'],
-                  ['analyst', '🔎 Analyst Report'],
-                  ['system', '🛠 System Trace'],
-                ] as const).map(([kind, label]) => (
-                  <Pressable
-                    key={kind}
-                    onPress={() => setExportReportKind(kind)}
-                    style={[
-                      styles.exportTypeBtn,
-                      exportReportKind === kind && styles.exportTypeBtnActive,
-                    ]}
-                  >
-                    <Text style={[
-                      styles.exportTypeLabel,
-                      exportReportKind === kind && styles.exportTypeLabelActive,
-                    ]}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.exportSelected}>
-                รายงานที่เลือก: {REPORT_KIND_LABELS[exportReportKind]}
-              </Text>
-              <View style={styles.exportRow}>
-                <Pressable
-                  onPress={handleExportHtml}
-                  style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <Ionicons name="logo-html5" size={13} color="#f97316" />
-                  <Text style={styles.exportHtmlLabel}>แชร์ / บันทึก HTML</Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleExportPdf}
-                  style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <Ionicons name="document-text-outline" size={13} color="#dc2626" />
-                  <Text style={styles.exportPdfLabel}>แชร์ / บันทึก PDF</Text>
-                </Pressable>
-              </View>
+              {renderExportControls(true)}
             </View>
           )}
 
