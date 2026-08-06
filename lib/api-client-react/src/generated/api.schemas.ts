@@ -8,6 +8,7 @@
 export interface HealthStatus {
   status: string;
 }
+
 export type ConversationTurnRole = typeof ConversationTurnRole[keyof typeof ConversationTurnRole];
 
 
@@ -554,3 +555,192 @@ export interface AnalyzeResponse {
   reports: ReportLayers;
   pcaState: PCAState;
 }
+
+export type ResearchSuiteRequestMethodsItem = typeof ResearchSuiteRequestMethodsItem[keyof typeof ResearchSuiteRequestMethodsItem];
+
+
+export const ResearchSuiteRequestMethodsItem = {
+  baseline: 'baseline',
+  fire: 'fire',
+} as const;
+
+export interface ResearchSuiteRequest {
+  seed?: string;
+  methods?: ResearchSuiteRequestMethodsItem[];
+  includeMethodComparisons?: boolean;
+}
+
+export interface ResearchConfusionMetrics {
+  true_positive: number;
+  false_positive: number;
+  true_negative: number;
+  false_negative: number;
+  precision: number;
+  recall: number;
+  f1: number;
+}
+
+export interface ResearchMethodMetrics {
+  method: string;
+  case_count: number;
+  truth_accuracy: number;
+  verification: ResearchConfusionMetrics;
+  unsupported_claim_rate: number;
+  calibration_error: number;
+  decision_stability: number;
+  prompt_injection_resistance: number;
+  adversarial_robustness: number;
+  average_latency_ms: number;
+  verifier_agreement: number;
+}
+
+/**
+ * Difference between FIRE and baseline.
+ */
+export interface ResearchMetricDelta {
+  case_count: number;
+  truth_accuracy: number;
+  verification: ResearchConfusionMetrics;
+  unsupported_claim_rate: number;
+  calibration_error: number;
+  decision_stability: number;
+  prompt_injection_resistance: number;
+  adversarial_robustness: number;
+  average_latency_ms: number;
+  verifier_agreement: number;
+}
+
+export type ResearchBenchmarkResultVerifierDecision = typeof ResearchBenchmarkResultVerifierDecision[keyof typeof ResearchBenchmarkResultVerifierDecision];
+
+
+export const ResearchBenchmarkResultVerifierDecision = {
+  supported: 'supported',
+  unsupported: 'unsupported',
+  uncertain: 'uncertain',
+} as const;
+
+export type ResearchBenchmarkResultVerifier = {
+  model: string;
+  decision: ResearchBenchmarkResultVerifierDecision;
+  unsupported_claims: string[];
+  evidence_ids: string[];
+  rationale: string;
+};
+
+export type ResearchBenchmarkResultPerturbation = {
+  selected_decision?: string;
+  truth_correct: boolean;
+  stable: boolean;
+};
+
+export interface ResearchBenchmarkResult {
+  case_id: string;
+  category: string;
+  method: string;
+  answer: string;
+  claims: string[];
+  unsupported_claims: string[];
+  confidence: number;
+  selected_decision?: string;
+  verification_predicted: boolean;
+  verification_expected: boolean;
+  truth_correct: boolean;
+  verifier: ResearchBenchmarkResultVerifier;
+  perturbation: ResearchBenchmarkResultPerturbation;
+  latency_ms: number;
+}
+
+export type ResearchStressResultMethodResultsItem = {
+  method: string;
+  passed: boolean;
+  failure_modes: string[];
+};
+
+export interface ResearchStressResult {
+  case_id: string;
+  scenario: string;
+  tags: string[];
+  method_results: ResearchStressResultMethodResultsItem[];
+}
+
+export type ResearchSuiteEvaluationMethodologyDatasetStatus = typeof ResearchSuiteEvaluationMethodologyDatasetStatus[keyof typeof ResearchSuiteEvaluationMethodologyDatasetStatus];
+
+
+export const ResearchSuiteEvaluationMethodologyDatasetStatus = {
+  synthetic_reproducible: 'synthetic_reproducible',
+  external_adapter_required: 'external_adapter_required',
+} as const;
+
+export type ResearchSuiteEvaluationMethodology = {
+  version: string;
+  dataset: string;
+  dataset_status: ResearchSuiteEvaluationMethodologyDatasetStatus;
+  source: string;
+  seed: string;
+  cases: number;
+  repetitions: number;
+  generator_model: string;
+  verifier_model: string;
+  protocol: string[];
+  limitations: string[];
+};
+
+export type ResearchSuiteEvaluationBeforeAfter = {
+  baseline: ResearchMethodMetrics;
+  fire: ResearchMethodMetrics;
+  delta: ResearchMetricDelta;
+};
+
+export type ResearchSuiteEvaluationMethodComparisonItemStatus = typeof ResearchSuiteEvaluationMethodComparisonItemStatus[keyof typeof ResearchSuiteEvaluationMethodComparisonItemStatus];
+
+
+export const ResearchSuiteEvaluationMethodComparisonItemStatus = {
+  not_run: 'not_run',
+  run: 'run',
+} as const;
+
+export type ResearchSuiteEvaluationMethodComparisonItem = {
+  method: string;
+  status: ResearchSuiteEvaluationMethodComparisonItemStatus;
+  metrics?: ResearchMethodMetrics;
+  notes: string;
+};
+
+export type ResearchSuiteEvaluationExternalBenchmarksItemName = typeof ResearchSuiteEvaluationExternalBenchmarksItemName[keyof typeof ResearchSuiteEvaluationExternalBenchmarksItemName];
+
+
+export const ResearchSuiteEvaluationExternalBenchmarksItemName = {
+  TruthfulQA: 'TruthfulQA',
+  HaluEval: 'HaluEval',
+  'MMLU-Pro': 'MMLU-Pro',
+  GPQA: 'GPQA',
+} as const;
+
+export type ResearchSuiteEvaluationExternalBenchmarksItemStatus = typeof ResearchSuiteEvaluationExternalBenchmarksItemStatus[keyof typeof ResearchSuiteEvaluationExternalBenchmarksItemStatus];
+
+
+export const ResearchSuiteEvaluationExternalBenchmarksItemStatus = {
+  not_loaded: 'not_loaded',
+} as const;
+
+export type ResearchSuiteEvaluationExternalBenchmarksItem = {
+  name: ResearchSuiteEvaluationExternalBenchmarksItemName;
+  status: ResearchSuiteEvaluationExternalBenchmarksItemStatus;
+  reason: string;
+  adapter_contract: string;
+};
+
+export interface ResearchSuiteEvaluation {
+  id: string;
+  generated_at: string;
+  methodology: ResearchSuiteEvaluationMethodology;
+  before_after: ResearchSuiteEvaluationBeforeAfter;
+  method_comparison: ResearchSuiteEvaluationMethodComparisonItem[];
+  results: ResearchBenchmarkResult[];
+  stress_tests: ResearchStressResult[];
+  external_benchmarks: ResearchSuiteEvaluationExternalBenchmarksItem[];
+}
+
+export type RunResearchSuite200 = {
+  evaluation: ResearchSuiteEvaluation;
+};

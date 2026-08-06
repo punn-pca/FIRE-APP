@@ -22,7 +22,9 @@ import type {
 import type {
   AnalyzeRequest,
   AnalyzeResponse,
-  HealthStatus
+  HealthStatus,
+  ResearchSuiteRequest,
+  RunResearchSuite200
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -84,6 +86,7 @@ export const getHealthCheckQueryKey = () => {
     `/api/healthz`
     ] as const;
     }
+
 
 export const getHealthCheckQueryOptions = <TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
@@ -198,4 +201,75 @@ export const useAnalyzeQuestion = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getAnalyzeQuestionMutationOptions(options));
+    }
+
+export const getRunResearchSuiteUrl = () => {
+
+
+
+
+  return `/api/analyze/research-suite`
+}
+
+/**
+ * @summary Run the reproducible FIRE benchmark and stress-test suite
+ */
+export const runResearchSuite = async (researchSuiteRequest?: ResearchSuiteRequest, options?: RequestInit): Promise<RunResearchSuite200> => {
+
+  return customFetch<RunResearchSuite200>(getRunResearchSuiteUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(researchSuiteRequest)
+  }
+);}
+
+
+
+
+
+export const getRunResearchSuiteMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runResearchSuite>>, TError,{data?: BodyType<ResearchSuiteRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof runResearchSuite>>, TError,{data?: BodyType<ResearchSuiteRequest>}, TContext> => {
+
+const mutationKey = ['runResearchSuite'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof runResearchSuite>>, {data?: BodyType<ResearchSuiteRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  runResearchSuite(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RunResearchSuiteMutationResult = NonNullable<Awaited<ReturnType<typeof runResearchSuite>>>
+    export type RunResearchSuiteMutationBody = BodyType<ResearchSuiteRequest> | undefined
+    export type RunResearchSuiteMutationError = ErrorType<void>
+
+    /**
+ * @summary Run the reproducible FIRE benchmark and stress-test suite
+ */
+export const useRunResearchSuite = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runResearchSuite>>, TError,{data?: BodyType<ResearchSuiteRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof runResearchSuite>>,
+        TError,
+        {data?: BodyType<ResearchSuiteRequest>},
+        TContext
+      > => {
+      return useMutation(getRunResearchSuiteMutationOptions(options));
     }

@@ -44,3 +44,9 @@ Decision audits must recompute the weighted matrix and stress-test every option 
 **Why:** A selected option or causal label can look plausible while being disconnected from the scores and evidence that produced it. Recomputable arithmetic and option-by-option counterfactual comparisons make decision metadata substantive.
 
 **How to apply:** Keep Cost, Benefit, Risk, Reversibility, and evidence alignment in the same matrix contract, derive counterfactual deltas from that matrix, and fail verification when scores, winners, or causal references cannot be recomputed.
+
+Research evaluation must distinguish measured synthetic results from external benchmark results; comparison methods are “not run” until their protocols and pinned datasets are actually executed.
+
+**Why:** A reproducible internal stress suite is useful for regression but cannot support a claim about TruthfulQA, HaluEval, MMLU-Pro, GPQA, or an unexecuted CoT/Reflexion-style baseline.
+
+**How to apply:** Always expose dataset status, seed, protocol, generator/verifier models, limitations, before–after deltas, and explicit not-loaded/not-run states in the Research Evaluation output.

@@ -28,6 +28,7 @@ import MessageBubble, {
   type PCAState,
   type ReportLayers,
   type ResearchEvaluation,
+  type ResearchSuiteEvaluation,
 } from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
 import PCAProgress from '@/components/PCAProgress';
@@ -78,6 +79,7 @@ export default function ChatScreen() {
   const [deepReasoning, setDeepReasoning] = useState(false);
   const [showToneBar, setShowToneBar] = useState(false);
   const [isResearchLoading, setIsResearchLoading] = useState(false);
+  const [isResearchSuiteLoading, setIsResearchSuiteLoading] = useState(false);
   const [personalMemories, setPersonalMemories] = useState<PersonalMemory[]>([]);
   const [memoryDraft, setMemoryDraft] = useState('');
   const [isMemoryLoading, setIsMemoryLoading] = useState(false);
@@ -258,6 +260,43 @@ export default function ChatScreen() {
       setIsResearchLoading(false);
     }
   }, [API_BASE, authHeaders, isLoading, isResearchLoading]);
+
+  const handleResearchSuite = useCallback(async () => {
+    if (isResearchSuiteLoading || isResearchLoading || isLoading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsResearchSuiteLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/analyze/research-suite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({
+          seed: `fire-suite-${Date.now()}`,
+          methods: ['baseline', 'fire'],
+          includeMethodComparisons: true,
+        }),
+      });
+      const data = await response.json() as {
+        evaluation?: ResearchSuiteEvaluation;
+        error?: string;
+      };
+      if (!response.ok || !data.evaluation) {
+        throw new Error(data.error ?? `เซิร์ฟเวอร์ผิดพลาด: ${response.status}`);
+      }
+      setMessages((prev) => [...prev, {
+        id: genId(),
+        role: 'assistant',
+        content: 'Research Suite เสร็จสิ้น — ดูผลก่อน–หลัง, metrics และ stress tests ด้านล่าง',
+        researchSuite: data.evaluation,
+        timestamp: new Date().toISOString(),
+      }]);
+      setShowToneBar(false);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'ไม่สามารถรัน Research Suite ได้';
+      Alert.alert('Research Suite ไม่สำเร็จ', errorMessage);
+    } finally {
+      setIsResearchSuiteLoading(false);
+    }
+  }, [API_BASE, authHeaders, isLoading, isResearchLoading, isResearchSuiteLoading]);
 
   const handleAddMemory = useCallback(async () => {
     const content = memoryDraft.trim();
@@ -483,6 +522,29 @@ export default function ChatScreen() {
               </Text>
               <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>
                 สร้างโลกจำลองและทดสอบ AI Under Test
+              </Text>
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={handleResearchSuite}
+            style={[
+              styles.researchButton,
+              { borderColor: colors.border, backgroundColor: colors.card },
+              (isResearchSuiteLoading || isResearchLoading || isLoading) && { opacity: 0.55 },
+            ]}
+            disabled={isResearchSuiteLoading || isResearchLoading || isLoading}
+          >
+            <Ionicons
+              name={isResearchSuiteLoading ? 'hourglass-outline' : 'analytics-outline'}
+              size={16}
+              color={colors.foreground}
+            />
+            <View style={styles.researchButtonText}>
+              <Text style={[styles.researchButtonTitle, { color: colors.foreground }]}>
+                {isResearchSuiteLoading ? 'กำลังรัน Research Suite…' : 'Run Research Suite'}
+              </Text>
+              <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>
+                ก่อน–หลัง · verifier · metrics · stress tests
               </Text>
             </View>
           </Pressable>

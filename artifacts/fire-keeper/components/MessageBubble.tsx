@@ -524,6 +524,103 @@ export interface ResearchEvaluation {
   };
 }
 
+export interface ResearchSuiteEvaluation {
+  id: string;
+  generated_at: string;
+  methodology: {
+    version: string;
+    dataset: string;
+    dataset_status: 'synthetic_reproducible' | 'external_adapter_required';
+    source: string;
+    seed: string;
+    cases: number;
+    repetitions: number;
+    generator_model: string;
+    verifier_model: string;
+    protocol: string[];
+    limitations: string[];
+  };
+  before_after: {
+    baseline: ResearchMethodMetrics;
+    fire: ResearchMethodMetrics;
+    delta: ResearchMetricDelta;
+  };
+  method_comparison: Array<{
+    method: string;
+    status: 'not_run' | 'run';
+    metrics?: ResearchMethodMetrics;
+    notes: string;
+  }>;
+  results: ResearchBenchmarkResult[];
+  stress_tests: Array<{
+    case_id: string;
+    scenario: string;
+    tags: string[];
+    method_results: Array<{ method: string; passed: boolean; failure_modes: string[] }>;
+  }>;
+  external_benchmarks: Array<{
+    name: 'TruthfulQA' | 'HaluEval' | 'MMLU-Pro' | 'GPQA';
+    status: 'not_loaded';
+    reason: string;
+    adapter_contract: string;
+  }>;
+}
+
+export interface ResearchConfusionMetrics {
+  true_positive: number;
+  false_positive: number;
+  true_negative: number;
+  false_negative: number;
+  precision: number;
+  recall: number;
+  f1: number;
+}
+
+export interface ResearchMethodMetrics {
+  method: string;
+  case_count: number;
+  truth_accuracy: number;
+  verification: ResearchConfusionMetrics;
+  unsupported_claim_rate: number;
+  calibration_error: number;
+  decision_stability: number;
+  prompt_injection_resistance: number;
+  adversarial_robustness: number;
+  average_latency_ms: number;
+  verifier_agreement: number;
+}
+
+export interface ResearchMetricDelta extends Omit<ResearchMethodMetrics, 'method'> {
+  method?: string;
+}
+
+export interface ResearchBenchmarkResult {
+  case_id: string;
+  category: string;
+  method: string;
+  answer: string;
+  claims: string[];
+  unsupported_claims: string[];
+  confidence: number;
+  selected_decision?: string;
+  verification_predicted: boolean;
+  verification_expected: boolean;
+  truth_correct: boolean;
+  verifier: {
+    model: string;
+    decision: 'supported' | 'unsupported' | 'uncertain';
+    unsupported_claims: string[];
+    evidence_ids: string[];
+    rationale: string;
+  };
+  perturbation: {
+    selected_decision?: string;
+    truth_correct: boolean;
+    stable: boolean;
+  };
+  latency_ms: number;
+}
+
 export interface ReportLayers {
   user_report: UserReport;
   analyst_report: AnalystReport;
@@ -1334,6 +1431,36 @@ export interface Message {
   timestamp?: string;
   reports?: ReportLayers;
   researchEvaluation?: ResearchEvaluation;
+  researchSuite?: ResearchSuiteEvaluation;
+}
+
+function ResearchMetricRow({
+  label,
+  baseline,
+  fire,
+  delta,
+  inverse = false,
+  percent = true,
+  styles,
+}: {
+  label: string;
+  baseline: number;
+  fire: number;
+  delta: number;
+  inverse?: boolean;
+  percent?: boolean;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const format = (value: number) => percent ? `${(value * 100).toFixed(1)}%` : `${Math.round(value)} ms`;
+  const deltaText = `${delta >= 0 ? '+' : ''}${format(delta)}`;
+  return (
+    <View style={styles.researchComparisonRow}>
+      <Text style={styles.researchComparisonLabel}>{label}{inverse ? ' (ต่ำดีกว่า)' : ''}</Text>
+      <Text style={styles.researchComparisonValue}>
+        {format(baseline)} → {format(fire)} · {deltaText}
+      </Text>
+    </View>
+  );
 }
 
 function ResearchEvaluationCard({
@@ -1416,6 +1543,107 @@ function ResearchEvaluationCard({
       <View style={styles.researchFindings}>
         {evaluation.evaluation_layer.findings.map((finding) => (
           <Text key={finding} style={styles.researchBody}>• {finding}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ResearchSuiteCard({
+  evaluation,
+  styles,
+}: {
+  evaluation: ResearchSuiteEvaluation;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const { baseline, fire, delta } = evaluation.before_after;
+  const stressFailures = evaluation.stress_tests.reduce(
+    (total, test) => total + test.method_results.reduce((count, result) => count + (result.passed ? 0 : 1), 0),
+    0,
+  );
+  const rows: Array<[string, number, number, number, boolean, boolean]> = [
+    ['Truth Accuracy', baseline.truth_accuracy, fire.truth_accuracy, delta.truth_accuracy, false, true],
+    ['Verification Precision', baseline.verification.precision, fire.verification.precision, delta.verification.precision, false, true],
+    ['Verification Recall', baseline.verification.recall, fire.verification.recall, delta.verification.recall, false, true],
+    ['Verification F1', baseline.verification.f1, fire.verification.f1, delta.verification.f1, false, true],
+    ['Unsupported Claim Rate', baseline.unsupported_claim_rate, fire.unsupported_claim_rate, delta.unsupported_claim_rate, true, true],
+    ['Calibration Error', baseline.calibration_error, fire.calibration_error, delta.calibration_error, true, true],
+    ['Decision Stability', baseline.decision_stability, fire.decision_stability, delta.decision_stability, false, true],
+    ['Prompt Injection Resistance', baseline.prompt_injection_resistance, fire.prompt_injection_resistance, delta.prompt_injection_resistance, false, true],
+    ['Adversarial Robustness', baseline.adversarial_robustness, fire.adversarial_robustness, delta.adversarial_robustness, false, true],
+    ['Average Latency', baseline.average_latency_ms, fire.average_latency_ms, delta.average_latency_ms, false, false],
+  ];
+  return (
+    <View style={styles.researchCard}>
+      <View style={styles.researchHeader}>
+        <View style={styles.researchHeaderText}>
+          <Text style={styles.researchTitle}>🧪 FIRE Research Suite</Text>
+          <Text style={styles.researchSubtitle}>
+            {evaluation.methodology.dataset} · {evaluation.methodology.cases} cases · seed {evaluation.methodology.seed}
+          </Text>
+        </View>
+        <Text style={styles.researchOverall}>ก่อน–หลัง</Text>
+      </View>
+      <Text style={styles.researchBody}>
+        Generator: {evaluation.methodology.generator_model}{'\n'}
+        Independent verifier: {evaluation.methodology.verifier_model}
+      </Text>
+      <Text style={styles.researchLabel}>Metrics: Baseline → FIRE · Δ</Text>
+      <View style={styles.researchComparisonCard}>
+        {rows.map(([label, baselineValue, fireValue, deltaValue, inverse, percent]) => (
+          <ResearchMetricRow
+            key={label}
+            label={label}
+            baseline={baselineValue}
+            fire={fireValue}
+            delta={deltaValue}
+            inverse={inverse}
+            percent={percent}
+            styles={styles}
+          />
+        ))}
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Verification Confusion Matrix</Text>
+        <Text style={styles.researchBody}>
+          Baseline TP/FP/TN/FN: {baseline.verification.true_positive}/{baseline.verification.false_positive}/{baseline.verification.true_negative}/{baseline.verification.false_negative}
+        </Text>
+        <Text style={styles.researchBody}>
+          FIRE TP/FP/TN/FN: {fire.verification.true_positive}/{fire.verification.false_positive}/{fire.verification.true_negative}/{fire.verification.false_negative}
+        </Text>
+        <Text style={styles.researchBody}>
+          Verifier agreement: {(fire.verifier_agreement * 100).toFixed(1)}%
+        </Text>
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Stress Testing</Text>
+        <Text style={styles.researchBody}>
+          {evaluation.stress_tests.length} scenarios · {stressFailures} failed method checks
+        </Text>
+        {evaluation.stress_tests.map((test) => {
+          const failed = test.method_results.filter((result) => !result.passed);
+          return (
+            <Text key={test.case_id} style={styles.researchBody}>
+              • {test.case_id}: {failed.length === 0 ? '✓ ผ่าน' : `✗ ${failed.map((result) => `${result.method}: ${result.failure_modes.join(', ')}`).join(' · ')}`}
+            </Text>
+          );
+        })}
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Scientific Methodology</Text>
+        {evaluation.methodology.protocol.slice(0, 5).map((step) => (
+          <Text key={step} style={styles.researchBody}>• {step}</Text>
+        ))}
+        {evaluation.method_comparison.filter((method) => method.status === 'not_run').map((method) => (
+          <Text key={method.method} style={styles.researchBody}>• {method.method}: ยังไม่ได้รัน — {method.notes}</Text>
+        ))}
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>External Benchmarks</Text>
+        {evaluation.external_benchmarks.map((benchmark) => (
+          <Text key={benchmark.name} style={styles.researchBody}>
+            • {benchmark.name}: ยังไม่ได้โหลด ({benchmark.reason})
+          </Text>
         ))}
       </View>
     </View>
@@ -1979,6 +2207,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
           {message.researchEvaluation && (
             <ResearchEvaluationCard evaluation={message.researchEvaluation} styles={styles} />
+          )}
+          {message.researchSuite && (
+            <ResearchSuiteCard evaluation={message.researchSuite} styles={styles} />
           )}
 
           {message.pcaState && reports && renderExportControls()}
@@ -3147,6 +3378,29 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       color: colors.mutedForeground,
       fontSize: 8,
       lineHeight: 11,
+      fontFamily: 'Inter_400Regular',
+    },
+    researchComparisonCard: {
+      backgroundColor: colors.card,
+      borderRadius: 7,
+      padding: 7,
+      gap: 4,
+    },
+    researchComparisonRow: {
+      gap: 1,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      paddingBottom: 4,
+    },
+    researchComparisonLabel: {
+      color: colors.foreground,
+      fontSize: 9,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    researchComparisonValue: {
+      color: colors.primary,
+      fontSize: 9,
       fontFamily: 'Inter_400Regular',
     },
     researchSection: {

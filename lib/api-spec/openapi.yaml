@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: analyze
     description: FIRE Framework cognitive analysis
+  - name: research
+    description: Reproducible FIRE research evaluation suite
 paths:
   /healthz:
     get:
@@ -48,6 +50,32 @@ paths:
           description: Invalid request
         "500":
           description: Analysis failure
+  /analyze/research-suite:
+    post:
+      operationId: runResearchSuite
+      tags: [research]
+      summary: Run the reproducible FIRE benchmark and stress-test suite
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchSuiteRequest"
+      responses:
+        "200":
+          description: Benchmark results with before/after metrics and stress tests
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evaluation:
+                    $ref: "#/components/schemas/ResearchSuiteEvaluation"
+                required: [evaluation]
+        "400":
+          description: Invalid research suite request
+        "500":
+          description: Research suite failure
 components:
   schemas:
     HealthStatus:
@@ -476,4 +504,153 @@ components:
         reports: { $ref: "#/components/schemas/ReportLayers" }
         pcaState: { $ref: "#/components/schemas/PCAState" }
       required: [response, reports, pcaState]
+    ResearchSuiteRequest:
+      type: object
+      properties:
+        seed: { type: string }
+        methods:
+          type: array
+          items:
+            type: string
+            enum: [baseline, fire]
+        includeMethodComparisons: { type: boolean }
+    ResearchConfusionMetrics:
+      type: object
+      properties:
+        true_positive: { type: number }
+        false_positive: { type: number }
+        true_negative: { type: number }
+        false_negative: { type: number }
+        precision: { type: number }
+        recall: { type: number }
+        f1: { type: number }
+      required: [true_positive, false_positive, true_negative, false_negative, precision, recall, f1]
+    ResearchMethodMetrics:
+      type: object
+      properties:
+        method: { type: string }
+        case_count: { type: number }
+        truth_accuracy: { type: number }
+        verification: { $ref: "#/components/schemas/ResearchConfusionMetrics" }
+        unsupported_claim_rate: { type: number }
+        calibration_error: { type: number }
+        decision_stability: { type: number }
+        prompt_injection_resistance: { type: number }
+        adversarial_robustness: { type: number }
+        average_latency_ms: { type: number }
+        verifier_agreement: { type: number }
+      required: [method, case_count, truth_accuracy, verification, unsupported_claim_rate, calibration_error, decision_stability, prompt_injection_resistance, adversarial_robustness, average_latency_ms, verifier_agreement]
+    ResearchMetricDelta:
+      type: object
+      description: Difference between FIRE and baseline.
+      properties:
+        case_count: { type: number }
+        truth_accuracy: { type: number }
+        verification: { $ref: "#/components/schemas/ResearchConfusionMetrics" }
+        unsupported_claim_rate: { type: number }
+        calibration_error: { type: number }
+        decision_stability: { type: number }
+        prompt_injection_resistance: { type: number }
+        adversarial_robustness: { type: number }
+        average_latency_ms: { type: number }
+        verifier_agreement: { type: number }
+      required: [case_count, truth_accuracy, verification, unsupported_claim_rate, calibration_error, decision_stability, prompt_injection_resistance, adversarial_robustness, average_latency_ms, verifier_agreement]
+    ResearchBenchmarkResult:
+      type: object
+      properties:
+        case_id: { type: string }
+        category: { type: string }
+        method: { type: string }
+        answer: { type: string }
+        claims: { type: array, items: { type: string } }
+        unsupported_claims: { type: array, items: { type: string } }
+        confidence: { type: number }
+        selected_decision: { type: string }
+        verification_predicted: { type: boolean }
+        verification_expected: { type: boolean }
+        truth_correct: { type: boolean }
+        verifier:
+          type: object
+          properties:
+            model: { type: string }
+            decision: { type: string, enum: [supported, unsupported, uncertain] }
+            unsupported_claims: { type: array, items: { type: string } }
+            evidence_ids: { type: array, items: { type: string } }
+            rationale: { type: string }
+          required: [model, decision, unsupported_claims, evidence_ids, rationale]
+        perturbation:
+          type: object
+          properties:
+            selected_decision: { type: string }
+            truth_correct: { type: boolean }
+            stable: { type: boolean }
+          required: [truth_correct, stable]
+        latency_ms: { type: number }
+      required: [case_id, category, method, answer, claims, unsupported_claims, confidence, verification_predicted, verification_expected, truth_correct, verifier, perturbation, latency_ms]
+    ResearchStressResult:
+      type: object
+      properties:
+        case_id: { type: string }
+        scenario: { type: string }
+        tags: { type: array, items: { type: string } }
+        method_results:
+          type: array
+          items:
+            type: object
+            properties:
+              method: { type: string }
+              passed: { type: boolean }
+              failure_modes: { type: array, items: { type: string } }
+            required: [method, passed, failure_modes]
+      required: [case_id, scenario, tags, method_results]
+    ResearchSuiteEvaluation:
+      type: object
+      properties:
+        id: { type: string }
+        generated_at: { type: string }
+        methodology:
+          type: object
+          properties:
+            version: { type: string }
+            dataset: { type: string }
+            dataset_status: { type: string, enum: [synthetic_reproducible, external_adapter_required] }
+            source: { type: string }
+            seed: { type: string }
+            cases: { type: number }
+            repetitions: { type: number }
+            generator_model: { type: string }
+            verifier_model: { type: string }
+            protocol: { type: array, items: { type: string } }
+            limitations: { type: array, items: { type: string } }
+          required: [version, dataset, dataset_status, source, seed, cases, repetitions, generator_model, verifier_model, protocol, limitations]
+        before_after:
+          type: object
+          properties:
+            baseline: { $ref: "#/components/schemas/ResearchMethodMetrics" }
+            fire: { $ref: "#/components/schemas/ResearchMethodMetrics" }
+            delta: { $ref: "#/components/schemas/ResearchMetricDelta" }
+          required: [baseline, fire, delta]
+        method_comparison:
+          type: array
+          items:
+            type: object
+            properties:
+              method: { type: string }
+              status: { type: string, enum: [not_run, run] }
+              metrics: { $ref: "#/components/schemas/ResearchMethodMetrics" }
+              notes: { type: string }
+            required: [method, status, notes]
+        results: { type: array, items: { $ref: "#/components/schemas/ResearchBenchmarkResult" } }
+        stress_tests: { type: array, items: { $ref: "#/components/schemas/ResearchStressResult" } }
+        external_benchmarks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, enum: [TruthfulQA, HaluEval, MMLU-Pro, GPQA] }
+              status: { type: string, enum: [not_loaded] }
+              reason: { type: string }
+              adapter_contract: { type: string }
+            required: [name, status, reason, adapter_contract]
+      required: [id, generated_at, methodology, before_after, method_comparison, results, stress_tests, external_benchmarks]
 

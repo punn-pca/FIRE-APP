@@ -15,6 +15,8 @@ import * as zod from 'zod';
 export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
+
+
 /**
  * @summary Analyze a question through the FIRE Framework pipeline
  */
@@ -573,5 +575,167 @@ export const AnalyzeQuestionResponse = zod.object({
   "governance": zod.record(zod.string(), zod.unknown()).optional(),
   "knowledge_map": zod.record(zod.string(), zod.unknown()).optional(),
   "trace": zod.array(zod.record(zod.string(), zod.unknown())).optional()
+})
+})
+
+
+/**
+ * @summary Run the reproducible FIRE benchmark and stress-test suite
+ */
+export const RunResearchSuiteBody = zod.object({
+  "seed": zod.string().optional(),
+  "methods": zod.array(zod.enum(['baseline', 'fire'])).optional(),
+  "includeMethodComparisons": zod.boolean().optional()
+})
+
+export const RunResearchSuiteResponse = zod.object({
+  "evaluation": zod.object({
+  "id": zod.string(),
+  "generated_at": zod.string(),
+  "methodology": zod.object({
+  "version": zod.string(),
+  "dataset": zod.string(),
+  "dataset_status": zod.enum(['synthetic_reproducible', 'external_adapter_required']),
+  "source": zod.string(),
+  "seed": zod.string(),
+  "cases": zod.number(),
+  "repetitions": zod.number(),
+  "generator_model": zod.string(),
+  "verifier_model": zod.string(),
+  "protocol": zod.array(zod.string()),
+  "limitations": zod.array(zod.string())
+}),
+  "before_after": zod.object({
+  "baseline": zod.object({
+  "method": zod.string(),
+  "case_count": zod.number(),
+  "truth_accuracy": zod.number(),
+  "verification": zod.object({
+  "true_positive": zod.number(),
+  "false_positive": zod.number(),
+  "true_negative": zod.number(),
+  "false_negative": zod.number(),
+  "precision": zod.number(),
+  "recall": zod.number(),
+  "f1": zod.number()
+}),
+  "unsupported_claim_rate": zod.number(),
+  "calibration_error": zod.number(),
+  "decision_stability": zod.number(),
+  "prompt_injection_resistance": zod.number(),
+  "adversarial_robustness": zod.number(),
+  "average_latency_ms": zod.number(),
+  "verifier_agreement": zod.number()
+}),
+  "fire": zod.object({
+  "method": zod.string(),
+  "case_count": zod.number(),
+  "truth_accuracy": zod.number(),
+  "verification": zod.object({
+  "true_positive": zod.number(),
+  "false_positive": zod.number(),
+  "true_negative": zod.number(),
+  "false_negative": zod.number(),
+  "precision": zod.number(),
+  "recall": zod.number(),
+  "f1": zod.number()
+}),
+  "unsupported_claim_rate": zod.number(),
+  "calibration_error": zod.number(),
+  "decision_stability": zod.number(),
+  "prompt_injection_resistance": zod.number(),
+  "adversarial_robustness": zod.number(),
+  "average_latency_ms": zod.number(),
+  "verifier_agreement": zod.number()
+}),
+  "delta": zod.object({
+  "case_count": zod.number(),
+  "truth_accuracy": zod.number(),
+  "verification": zod.object({
+  "true_positive": zod.number(),
+  "false_positive": zod.number(),
+  "true_negative": zod.number(),
+  "false_negative": zod.number(),
+  "precision": zod.number(),
+  "recall": zod.number(),
+  "f1": zod.number()
+}),
+  "unsupported_claim_rate": zod.number(),
+  "calibration_error": zod.number(),
+  "decision_stability": zod.number(),
+  "prompt_injection_resistance": zod.number(),
+  "adversarial_robustness": zod.number(),
+  "average_latency_ms": zod.number(),
+  "verifier_agreement": zod.number()
+}).describe('Difference between FIRE and baseline.')
+}),
+  "method_comparison": zod.array(zod.object({
+  "method": zod.string(),
+  "status": zod.enum(['not_run', 'run']),
+  "metrics": zod.object({
+  "method": zod.string(),
+  "case_count": zod.number(),
+  "truth_accuracy": zod.number(),
+  "verification": zod.object({
+  "true_positive": zod.number(),
+  "false_positive": zod.number(),
+  "true_negative": zod.number(),
+  "false_negative": zod.number(),
+  "precision": zod.number(),
+  "recall": zod.number(),
+  "f1": zod.number()
+}),
+  "unsupported_claim_rate": zod.number(),
+  "calibration_error": zod.number(),
+  "decision_stability": zod.number(),
+  "prompt_injection_resistance": zod.number(),
+  "adversarial_robustness": zod.number(),
+  "average_latency_ms": zod.number(),
+  "verifier_agreement": zod.number()
+}).optional(),
+  "notes": zod.string()
+})),
+  "results": zod.array(zod.object({
+  "case_id": zod.string(),
+  "category": zod.string(),
+  "method": zod.string(),
+  "answer": zod.string(),
+  "claims": zod.array(zod.string()),
+  "unsupported_claims": zod.array(zod.string()),
+  "confidence": zod.number(),
+  "selected_decision": zod.string().optional(),
+  "verification_predicted": zod.boolean(),
+  "verification_expected": zod.boolean(),
+  "truth_correct": zod.boolean(),
+  "verifier": zod.object({
+  "model": zod.string(),
+  "decision": zod.enum(['supported', 'unsupported', 'uncertain']),
+  "unsupported_claims": zod.array(zod.string()),
+  "evidence_ids": zod.array(zod.string()),
+  "rationale": zod.string()
+}),
+  "perturbation": zod.object({
+  "selected_decision": zod.string().optional(),
+  "truth_correct": zod.boolean(),
+  "stable": zod.boolean()
+}),
+  "latency_ms": zod.number()
+})),
+  "stress_tests": zod.array(zod.object({
+  "case_id": zod.string(),
+  "scenario": zod.string(),
+  "tags": zod.array(zod.string()),
+  "method_results": zod.array(zod.object({
+  "method": zod.string(),
+  "passed": zod.boolean(),
+  "failure_modes": zod.array(zod.string())
+}))
+})),
+  "external_benchmarks": zod.array(zod.object({
+  "name": zod.enum(['TruthfulQA', 'HaluEval', 'MMLU-Pro', 'GPQA']),
+  "status": zod.enum(['not_loaded']),
+  "reason": zod.string(),
+  "adapter_contract": zod.string()
+}))
 })
 })
