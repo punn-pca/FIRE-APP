@@ -17,6 +17,8 @@ import {
   buildConfidenceReport,
   buildVerificationReport,
   buildDecisionMatrix,
+  buildCausalReasoning,
+  buildCounterfactualAnalysis,
   buildLogicalVerification,
   buildReasoningGraph,
   buildStateTransitions,
@@ -201,6 +203,8 @@ describe("buildEvidenceReport — weighted evidence scoring", () => {
   assert("Evidence items contain component scores", report.items.every((item) =>
     item.relevance_score >= 0 && item.quality_score >= 0 && item.composite_score >= 0
   ));
+  assert("Evidence coverage reports source families", (report.source_coverage?.memory ?? 0) > 0);
+  assert("Evidence diversity excludes user input", (report.source_diversity_score ?? 0) <= 1);
 });
 
 describe("buildEvidenceReport — irrelevant short history is excluded", () => {
@@ -584,6 +588,33 @@ describe("buildDecisionMatrix — deterministic alternatives and winner", () => 
     (option) => option.id === matrix.selected_option && option.weighted_score === matrix.selected_score
   ));
   assert("Selection reason exposes causal score", matrix.selection_reason.includes("weighted score"));
+  assert("Decision matrix uses Cost/Benefit/Risk/Reversibility", [
+    "cost",
+    "benefit",
+    "risk",
+    "reversibility",
+  ].every((criterion) => criterion in matrix.criteria_weights));
+  assert("Counterfactual compares every option", matrix.counterfactual_analysis?.comparisons.length === matrix.options.length);
+  assert("Causal reasoning has traceable links", matrix.causal_reasoning?.links.every((link) =>
+    link.evidence_ids.every((id) => state.evidence_report.items.some((item) => item.id === id))
+  ) === true);
+  assert("Counterfactual robust option is computed", (matrix.counterfactual_analysis?.most_robust_option.length ?? 0) > 0);
+
+  const brokenMatrix = {
+    ...matrix,
+    options: matrix.options.map((option, index) => index === 0
+      ? { ...option, weighted_score: Number((option.weighted_score + 0.2).toFixed(3)) }
+      : option),
+  };
+  state.decision_matrix = brokenMatrix;
+  const brokenVerification = buildLogicalVerification(
+    state,
+    "[ข้อเท็จจริง]\nข้อมูลจาก knowledge base [หลักฐาน: evidence-knowledge]\n" +
+      "[สมมติฐาน]\nอาจมีข้อมูลที่ขาด\nข้อสรุป: ดำเนินการเป็นระยะ\nผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย"
+  );
+  assert("Broken weighted score fails arithmetic verification", brokenVerification.checks.find(
+    (check) => check.criterion === "decision_matrix_arithmetic"
+  )?.passed === false);
 });
 
 describe("buildLogicalVerification — grounding and decision alignment", () => {

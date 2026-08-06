@@ -8,7 +8,6 @@
 export interface HealthStatus {
   status: string;
 }
-
 export type ConversationTurnRole = typeof ConversationTurnRole[keyof typeof ConversationTurnRole];
 
 
@@ -69,11 +68,16 @@ export interface EvidenceItem {
   basis: string[];
 }
 
+export type EvidenceReportSourceCoverage = {[key: string]: number};
+
 export interface EvidenceReport {
   methodology: string;
   items: EvidenceItem[];
   aggregate_score: number;
   coverage_score: number;
+  source_coverage: EvidenceReportSourceCoverage;
+  source_diversity_score: number;
+  supported_source_count: number;
 }
 
 export interface VerificationCheck {
@@ -271,6 +275,51 @@ export interface IntentRoute {
 
 export type DecisionMatrixCriteriaWeights = {[key: string]: number};
 
+export interface CounterfactualComparison {
+  option_id: string;
+  condition: string;
+  baseline_score: number;
+  counterfactual_score: number;
+  delta: number;
+  outcome: string;
+  evidence_ids: string[];
+}
+
+export interface CounterfactualAnalysis {
+  methodology: string;
+  baseline_condition: string;
+  counterfactual_condition: string;
+  comparisons: CounterfactualComparison[];
+  most_robust_option: string;
+  sensitivity_score: number;
+}
+
+export type CausalLinkRelation = typeof CausalLinkRelation[keyof typeof CausalLinkRelation];
+
+
+export const CausalLinkRelation = {
+  contributes_to: 'contributes_to',
+  constrains: 'constrains',
+  moderates: 'moderates',
+} as const;
+
+export interface CausalLink {
+  id: string;
+  cause: string;
+  effect: string;
+  mechanism: string;
+  relation: CausalLinkRelation;
+  evidence_ids: string[];
+  confidence: number;
+}
+
+export interface CausalReasoning {
+  methodology: string;
+  links: CausalLink[];
+  confounders: string[];
+  score: number;
+}
+
 export interface DecisionMatrix {
   methodology: string;
   criteria_weights: DecisionMatrixCriteriaWeights;
@@ -278,6 +327,8 @@ export interface DecisionMatrix {
   selected_option: string;
   selected_score: number;
   selection_reason: string;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }
 
 export type LogicalVerificationStatus = typeof LogicalVerificationStatus[keyof typeof LogicalVerificationStatus];
@@ -409,6 +460,8 @@ export interface PCAState {
   dataflow: DataflowEdge[];
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   runtime_summary: RuntimeSummary;
@@ -454,6 +507,8 @@ export interface AnalystReport {
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   decision_matrix?: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }
 
 export type SystemTraceRuntimeLifecycleItem = { [key: string]: unknown };

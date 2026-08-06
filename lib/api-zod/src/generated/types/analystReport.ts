@@ -7,7 +7,9 @@
  */
 import type { AnalystReportConflictsItem } from './analystReportConflictsItem';
 import type { AnalystReportKnowledgeMap } from './analystReportKnowledgeMap';
+import type { CausalReasoning } from './causalReasoning';
 import type { ConfidenceReport } from './confidenceReport';
+import type { CounterfactualAnalysis } from './counterfactualAnalysis';
 import type { DecisionMatrix } from './decisionMatrix';
 import type { EvidenceReport } from './evidenceReport';
 import type { LogicalVerification } from './logicalVerification';
@@ -24,4 +26,6 @@ export interface AnalystReport {
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   decision_matrix?: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }

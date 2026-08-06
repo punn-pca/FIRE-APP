@@ -112,6 +112,9 @@ export interface EvidenceReport {
   items: EvidenceItem[];
   aggregate_score: number;
   coverage_score: number;
+  source_coverage?: Record<EvidenceItem['source'], number>;
+  source_diversity_score?: number;
+  supported_source_count?: number;
 }
 
 export interface ConflictFinding {
@@ -242,6 +245,44 @@ export interface DecisionMatrix {
   selected_option: string;
   selected_score: number;
   selection_reason: string;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
+}
+
+export interface CounterfactualComparison {
+  option_id: string;
+  condition: string;
+  baseline_score: number;
+  counterfactual_score: number;
+  delta: number;
+  outcome: string;
+  evidence_ids: string[];
+}
+
+export interface CounterfactualAnalysis {
+  methodology: string;
+  baseline_condition: string;
+  counterfactual_condition: string;
+  comparisons: CounterfactualComparison[];
+  most_robust_option: string;
+  sensitivity_score: number;
+}
+
+export interface CausalLink {
+  id: string;
+  cause: string;
+  effect: string;
+  mechanism: string;
+  relation: 'contributes_to' | 'constrains' | 'moderates';
+  evidence_ids: string[];
+  confidence: number;
+}
+
+export interface CausalReasoning {
+  methodology: string;
+  links: CausalLink[];
+  confounders: string[];
+  score: number;
 }
 
 export interface LogicalVerification {
@@ -323,6 +364,8 @@ export interface PCAState {
   dataflow?: DataflowEdge[];
   memory_retrieval?: MemoryRetrievalReport;
   decision_matrix?: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
   logical_verification?: LogicalVerification;
   reasoning_quality?: ReasoningQualityMetrics;
   runtime_summary?: RuntimeSummary;
@@ -398,6 +441,8 @@ export interface AnalystReport {
   logical_verification?: LogicalVerification;
   reasoning_quality?: ReasoningQualityMetrics;
   decision_matrix?: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }
 
 export interface SystemTrace {
@@ -1768,6 +1813,12 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       if (analyst_report.decision_matrix) {
         content += `Decision Matrix: ${analyst_report.decision_matrix.selected_option}\n`;
       }
+      if (analyst_report.counterfactual_analysis) {
+        content += `Counterfactual: ${analyst_report.counterfactual_analysis.most_robust_option} · sensitivity ${analyst_report.counterfactual_analysis.sensitivity_score.toFixed(3)}\n`;
+      }
+      if (analyst_report.causal_reasoning) {
+        content += `Causal links: ${analyst_report.causal_reasoning.links.length} · score ${analyst_report.causal_reasoning.score.toFixed(3)}\n`;
+      }
 
       content += `Confidence: ${confidence_summary.score.toFixed(1)}/100 (${confidence_summary.band})\n`;
       content += `\n=== SYSTEM TRACE — รายละเอียดระบบ ===\n`;
@@ -2049,6 +2100,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                       <Text style={styles.reportBodyText}>
                         aggregate {reports.analyst_report.evidence_report.aggregate_score.toFixed(3)}
                         {' · '}coverage {reports.analyst_report.evidence_report.coverage_score.toFixed(3)}
+                        {' · '}diversity {(reports.analyst_report.evidence_report.source_diversity_score ?? 0).toFixed(3)}
+                      </Text>
+                      <Text style={styles.reportSectionHint}>
+                        source families: {Object.entries(reports.analyst_report.evidence_report.source_coverage ?? {})
+                          .filter(([source]) => source !== 'user_input')
+                          .map(([source, score]) => `${source} ${(score ?? 0).toFixed(3)}`)
+                          .join(' · ') || 'ไม่มีแหล่ง non-user ที่ใช้ได้'}
                       </Text>
                       {reports.analyst_report.evidence_report.items.slice(0, 5).map((item) => (
                         <View key={item.id} style={styles.evidenceItemRow}>
@@ -2146,14 +2204,64 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   {reports.analyst_report.decision_matrix && reports.analyst_report.decision_matrix.options.length > 0 ? (
                     <View style={styles.reportCallout}>
                       <Text style={styles.reportCalloutTitle}>Decision Matrix</Text>
+                      <Text style={styles.reportSectionHint}>
+                        {Object.entries(reports.analyst_report.decision_matrix.criteria_weights)
+                          .map(([criterion, weight]) => `${criterion} ${(weight ?? 0).toFixed(2)}`)
+                          .join(' · ')}
+                      </Text>
                       <Text style={styles.reportBodyText}>
                         เลือก: {reports.analyst_report.decision_matrix.selected_option}
                         {' · '}score {reports.analyst_report.decision_matrix.selected_score.toFixed(3)}
                       </Text>
                       <Text style={styles.reportBodyText}>{reports.analyst_report.decision_matrix.selection_reason}</Text>
+                      {reports.analyst_report.decision_matrix.options.map((option) => (
+                        <Text key={option.id} style={styles.reportSectionHint} numberOfLines={2}>
+                          {option.label}: {Object.entries(option.criteria)
+                            .map(([criterion, value]) => `${criterion} ${(value ?? 0).toFixed(2)}`)
+                            .join(' · ')}
+                        </Text>
+                      ))}
                     </View>
                   ) : (
                     <Text style={styles.reportBodyText}>คำถามนี้ไม่ใช่เส้นทางการตัดสินใจ</Text>
+                  )}
+                  {reports.analyst_report.counterfactual_analysis && (
+                    <View style={styles.reportCallout}>
+                      <Text style={styles.reportCalloutTitle}>Counterfactual Stress Test</Text>
+                      <Text style={styles.reportSectionHint}>
+                        {reports.analyst_report.counterfactual_analysis.counterfactual_condition}
+                      </Text>
+                      <Text style={styles.reportBodyText}>
+                        robust: {reports.analyst_report.counterfactual_analysis.most_robust_option}
+                        {' · '}sensitivity {reports.analyst_report.counterfactual_analysis.sensitivity_score.toFixed(3)}
+                      </Text>
+                      {reports.analyst_report.counterfactual_analysis.comparisons.map((comparison) => (
+                        <Text key={comparison.option_id} style={styles.reportSectionHint} numberOfLines={2}>
+                          {comparison.option_id}: {comparison.baseline_score.toFixed(3)} → {comparison.counterfactual_score.toFixed(3)}
+                          {' · '}Δ {comparison.delta.toFixed(3)} · {comparison.outcome}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
+                  {reports.analyst_report.causal_reasoning && (
+                    <View style={styles.reportCallout}>
+                      <Text style={styles.reportCalloutTitle}>Causal Reasoning</Text>
+                      <Text style={styles.reportBodyText}>
+                        score {reports.analyst_report.causal_reasoning.score.toFixed(3)}
+                        {' · '}links {reports.analyst_report.causal_reasoning.links.length}
+                      </Text>
+                      {reports.analyst_report.causal_reasoning.links.map((link) => (
+                        <Text key={link.id} style={styles.reportSectionHint} numberOfLines={3}>
+                          • {link.cause} → {link.effect} · {link.relation} · confidence {link.confidence.toFixed(3)}
+                          {'\n'}  {link.mechanism}
+                        </Text>
+                      ))}
+                      {reports.analyst_report.causal_reasoning.confounders.length > 0 && (
+                        <Text style={styles.reportSectionHint} numberOfLines={2}>
+                          confounders: {reports.analyst_report.causal_reasoning.confounders.join(' · ')}
+                        </Text>
+                      )}
+                    </View>
                   )}
                   <Text style={styles.reportGroupTitle}>4. Verification</Text>
                   {reports.analyst_report.verification && (
@@ -2335,6 +2443,36 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   {message.pcaState.decision_matrix.options.map((option) => (
                     <Text key={option.id} style={styles.osCardText} numberOfLines={2}>
                       {option.id === message.pcaState?.decision_matrix?.selected_option ? '✓' : '•'} {option.label}: {option.weighted_score.toFixed(3)}
+                      {' · '}{Object.entries(option.criteria).map(([criterion, value]) => `${criterion} ${(value ?? 0).toFixed(2)}`).join(' / ')}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.intent?.type === 'decision' && message.pcaState.counterfactual_analysis && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>↔ Counterfactual Stress Test</Text>
+                  <Text style={styles.osCardText} numberOfLines={2}>
+                    robust {message.pcaState.counterfactual_analysis.most_robust_option}
+                    {' · '}sensitivity {message.pcaState.counterfactual_analysis.sensitivity_score.toFixed(3)}
+                  </Text>
+                  {message.pcaState.counterfactual_analysis.comparisons.map((comparison) => (
+                    <Text key={comparison.option_id} style={styles.osCardText} numberOfLines={2}>
+                      • {comparison.option_id}: {comparison.baseline_score.toFixed(3)} → {comparison.counterfactual_score.toFixed(3)}
+                      {' · '}Δ {comparison.delta.toFixed(3)}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {message.pcaState.intent?.type === 'decision' && message.pcaState.causal_reasoning && (
+                <View style={styles.osCard}>
+                  <Text style={styles.osCardTitle}>⛓ Causal Reasoning</Text>
+                  <Text style={styles.osCardText}>
+                    score {message.pcaState.causal_reasoning.score.toFixed(3)}
+                    {' · '}links {message.pcaState.causal_reasoning.links.length}
+                  </Text>
+                  {message.pcaState.causal_reasoning.links.map((link) => (
+                    <Text key={link.id} style={styles.osCardText} numberOfLines={3}>
+                      • {link.cause} → {link.effect} · {link.relation} · {link.confidence.toFixed(3)}
                     </Text>
                   ))}
                 </View>

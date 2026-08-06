@@ -5,7 +5,9 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CausalReasoning } from './causalReasoning';
 import type { ConfidenceReport } from './confidenceReport';
+import type { CounterfactualAnalysis } from './counterfactualAnalysis';
 import type { DataflowEdge } from './dataflowEdge';
 import type { DecisionMatrix } from './decisionMatrix';
 import type { EvidenceReport } from './evidenceReport';
@@ -45,6 +47,8 @@ export interface PCAState {
   dataflow: DataflowEdge[];
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   runtime_summary: RuntimeSummary;

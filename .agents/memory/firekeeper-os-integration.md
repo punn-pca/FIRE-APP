@@ -38,3 +38,9 @@ Claim-level reasoning and state mutations should be derived from the same finali
 **Why:** A graph assembled separately from the pipeline can look explanatory while missing the actual evidence, selected option, conflicts, or confidence mutation that produced the response.
 
 **How to apply:** Build claims from evidence/hypotheses/unknowns/decision state, connect them with typed relations and support weights, and record state transitions with before/after values, trigger, and user-visible impact. Keep unsupported claims explicit rather than hiding them in an overall pass status.
+
+Decision audits must recompute the weighted matrix and stress-test every option under an explicit changed condition; causal links must expose their mechanism, confidence, and traceable evidence IDs.
+
+**Why:** A selected option or causal label can look plausible while being disconnected from the scores and evidence that produced it. Recomputable arithmetic and option-by-option counterfactual comparisons make decision metadata substantive.
+
+**How to apply:** Keep Cost, Benefit, Risk, Reversibility, and evidence alignment in the same matrix contract, derive counterfactual deltas from that matrix, and fail verification when scores, winners, or causal references cannot be recomputed.

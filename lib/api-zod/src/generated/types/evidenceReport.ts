@@ -6,10 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { EvidenceItem } from './evidenceItem';
+import type { EvidenceReportSourceCoverage } from './evidenceReportSourceCoverage';
 
 export interface EvidenceReport {
   methodology: string;
   items: EvidenceItem[];
   aggregate_score: number;
   coverage_score: number;
+  source_coverage: EvidenceReportSourceCoverage;
+  source_diversity_score: number;
+  supported_source_count: number;
 }

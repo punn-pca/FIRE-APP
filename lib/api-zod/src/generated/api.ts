@@ -15,8 +15,6 @@ import * as zod from 'zod';
 export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
-
-
 /**
  * @summary Analyze a question through the FIRE Framework pipeline
  */
@@ -78,7 +76,10 @@ export const AnalyzeQuestionResponse = zod.object({
   "basis": zod.array(zod.string())
 })),
   "aggregate_score": zod.number(),
-  "coverage_score": zod.number()
+  "coverage_score": zod.number(),
+  "source_coverage": zod.record(zod.string(), zod.number()),
+  "source_diversity_score": zod.number(),
+  "supported_source_count": zod.number()
 }),
   "knowledge_map": zod.record(zod.string(), zod.unknown()),
   "missing_info": zod.array(zod.string()),
@@ -141,7 +142,67 @@ export const AnalyzeQuestionResponse = zod.object({
 })),
   "selected_option": zod.string(),
   "selected_score": zod.number(),
-  "selection_reason": zod.string()
+  "selection_reason": zod.string(),
+  "counterfactual_analysis": zod.object({
+  "methodology": zod.string(),
+  "baseline_condition": zod.string(),
+  "counterfactual_condition": zod.string(),
+  "comparisons": zod.array(zod.object({
+  "option_id": zod.string(),
+  "condition": zod.string(),
+  "baseline_score": zod.number(),
+  "counterfactual_score": zod.number(),
+  "delta": zod.number(),
+  "outcome": zod.string(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "most_robust_option": zod.string(),
+  "sensitivity_score": zod.number()
+}).optional(),
+  "causal_reasoning": zod.object({
+  "methodology": zod.string(),
+  "links": zod.array(zod.object({
+  "id": zod.string(),
+  "cause": zod.string(),
+  "effect": zod.string(),
+  "mechanism": zod.string(),
+  "relation": zod.enum(['contributes_to', 'constrains', 'moderates']),
+  "evidence_ids": zod.array(zod.string()),
+  "confidence": zod.number()
+})),
+  "confounders": zod.array(zod.string()),
+  "score": zod.number()
+}).optional()
+}).optional(),
+  "counterfactual_analysis": zod.object({
+  "methodology": zod.string(),
+  "baseline_condition": zod.string(),
+  "counterfactual_condition": zod.string(),
+  "comparisons": zod.array(zod.object({
+  "option_id": zod.string(),
+  "condition": zod.string(),
+  "baseline_score": zod.number(),
+  "counterfactual_score": zod.number(),
+  "delta": zod.number(),
+  "outcome": zod.string(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "most_robust_option": zod.string(),
+  "sensitivity_score": zod.number()
+}).optional(),
+  "causal_reasoning": zod.object({
+  "methodology": zod.string(),
+  "links": zod.array(zod.object({
+  "id": zod.string(),
+  "cause": zod.string(),
+  "effect": zod.string(),
+  "mechanism": zod.string(),
+  "relation": zod.enum(['contributes_to', 'constrains', 'moderates']),
+  "evidence_ids": zod.array(zod.string()),
+  "confidence": zod.number()
+})),
+  "confounders": zod.array(zod.string()),
+  "score": zod.number()
 }).optional()
 }),
   "system_trace": zod.object({
@@ -275,7 +336,10 @@ export const AnalyzeQuestionResponse = zod.object({
   "basis": zod.array(zod.string())
 })),
   "aggregate_score": zod.number(),
-  "coverage_score": zod.number()
+  "coverage_score": zod.number(),
+  "source_coverage": zod.record(zod.string(), zod.number()),
+  "source_diversity_score": zod.number(),
+  "supported_source_count": zod.number()
 }),
   "confidence_report": zod.object({
   "score": zod.number(),
@@ -353,8 +417,68 @@ export const AnalyzeQuestionResponse = zod.object({
 })),
   "selected_option": zod.string(),
   "selected_score": zod.number(),
-  "selection_reason": zod.string()
+  "selection_reason": zod.string(),
+  "counterfactual_analysis": zod.object({
+  "methodology": zod.string(),
+  "baseline_condition": zod.string(),
+  "counterfactual_condition": zod.string(),
+  "comparisons": zod.array(zod.object({
+  "option_id": zod.string(),
+  "condition": zod.string(),
+  "baseline_score": zod.number(),
+  "counterfactual_score": zod.number(),
+  "delta": zod.number(),
+  "outcome": zod.string(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "most_robust_option": zod.string(),
+  "sensitivity_score": zod.number()
+}).optional(),
+  "causal_reasoning": zod.object({
+  "methodology": zod.string(),
+  "links": zod.array(zod.object({
+  "id": zod.string(),
+  "cause": zod.string(),
+  "effect": zod.string(),
+  "mechanism": zod.string(),
+  "relation": zod.enum(['contributes_to', 'constrains', 'moderates']),
+  "evidence_ids": zod.array(zod.string()),
+  "confidence": zod.number()
+})),
+  "confounders": zod.array(zod.string()),
+  "score": zod.number()
+}).optional()
 }),
+  "counterfactual_analysis": zod.object({
+  "methodology": zod.string(),
+  "baseline_condition": zod.string(),
+  "counterfactual_condition": zod.string(),
+  "comparisons": zod.array(zod.object({
+  "option_id": zod.string(),
+  "condition": zod.string(),
+  "baseline_score": zod.number(),
+  "counterfactual_score": zod.number(),
+  "delta": zod.number(),
+  "outcome": zod.string(),
+  "evidence_ids": zod.array(zod.string())
+})),
+  "most_robust_option": zod.string(),
+  "sensitivity_score": zod.number()
+}).optional(),
+  "causal_reasoning": zod.object({
+  "methodology": zod.string(),
+  "links": zod.array(zod.object({
+  "id": zod.string(),
+  "cause": zod.string(),
+  "effect": zod.string(),
+  "mechanism": zod.string(),
+  "relation": zod.enum(['contributes_to', 'constrains', 'moderates']),
+  "evidence_ids": zod.array(zod.string()),
+  "confidence": zod.number()
+})),
+  "confounders": zod.array(zod.string()),
+  "score": zod.number()
+}).optional(),
   "logical_verification": zod.object({
   "status": zod.enum(['ผ่าน', 'ต้องตรวจสอบ']),
   "checks": zod.array(zod.object({

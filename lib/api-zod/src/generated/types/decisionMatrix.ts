@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CausalReasoning } from './causalReasoning';
+import type { CounterfactualAnalysis } from './counterfactualAnalysis';
 import type { DecisionMatrixCriteriaWeights } from './decisionMatrixCriteriaWeights';
 import type { DecisionOption } from './decisionOption';
 
@@ -15,4 +17,6 @@ export interface DecisionMatrix {
   selected_option: string;
   selected_score: number;
   selection_reason: string;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }

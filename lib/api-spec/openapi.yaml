@@ -114,7 +114,12 @@ components:
           items: { $ref: "#/components/schemas/EvidenceItem" }
         aggregate_score: { type: number }
         coverage_score: { type: number }
-      required: [methodology, items, aggregate_score, coverage_score]
+        source_coverage:
+          type: object
+          additionalProperties: { type: number }
+        source_diversity_score: { type: number }
+        supported_source_count: { type: number }
+      required: [methodology, items, aggregate_score, coverage_score, source_coverage, source_diversity_score, supported_source_count]
     VerificationCheck:
       type: object
       properties:
@@ -276,7 +281,53 @@ components:
         selected_option: { type: string }
         selected_score: { type: number }
         selection_reason: { type: string }
+        counterfactual_analysis: { $ref: "#/components/schemas/CounterfactualAnalysis" }
+        causal_reasoning: { $ref: "#/components/schemas/CausalReasoning" }
       required: [methodology, criteria_weights, options, selected_option, selected_score, selection_reason]
+    CounterfactualComparison:
+      type: object
+      properties:
+        option_id: { type: string }
+        condition: { type: string }
+        baseline_score: { type: number }
+        counterfactual_score: { type: number }
+        delta: { type: number }
+        outcome: { type: string }
+        evidence_ids: { type: array, items: { type: string } }
+      required: [option_id, condition, baseline_score, counterfactual_score, delta, outcome, evidence_ids]
+    CounterfactualAnalysis:
+      type: object
+      properties:
+        methodology: { type: string }
+        baseline_condition: { type: string }
+        counterfactual_condition: { type: string }
+        comparisons:
+          type: array
+          items: { $ref: "#/components/schemas/CounterfactualComparison" }
+        most_robust_option: { type: string }
+        sensitivity_score: { type: number }
+      required: [methodology, baseline_condition, counterfactual_condition, comparisons, most_robust_option, sensitivity_score]
+    CausalLink:
+      type: object
+      properties:
+        id: { type: string }
+        cause: { type: string }
+        effect: { type: string }
+        mechanism: { type: string }
+        relation: { type: string, enum: [contributes_to, constrains, moderates] }
+        evidence_ids: { type: array, items: { type: string } }
+        confidence: { type: number }
+      required: [id, cause, effect, mechanism, relation, evidence_ids, confidence]
+    CausalReasoning:
+      type: object
+      properties:
+        methodology: { type: string }
+        links:
+          type: array
+          items: { $ref: "#/components/schemas/CausalLink" }
+        confounders: { type: array, items: { type: string } }
+        score: { type: number }
+      required: [methodology, links, confounders, score]
     LogicalVerification:
       type: object
       properties:
@@ -354,6 +405,8 @@ components:
           items: { $ref: "#/components/schemas/DataflowEdge" }
         memory_retrieval: { $ref: "#/components/schemas/MemoryRetrievalReport" }
         decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
+        counterfactual_analysis: { $ref: "#/components/schemas/CounterfactualAnalysis" }
+        causal_reasoning: { $ref: "#/components/schemas/CausalReasoning" }
         logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
         reasoning_quality: { $ref: "#/components/schemas/ReasoningQualityMetrics" }
         runtime_summary: { $ref: "#/components/schemas/RuntimeSummary" }
@@ -387,6 +440,8 @@ components:
         logical_verification: { $ref: "#/components/schemas/LogicalVerification" }
         reasoning_quality: { $ref: "#/components/schemas/ReasoningQualityMetrics" }
         decision_matrix: { $ref: "#/components/schemas/DecisionMatrix" }
+        counterfactual_analysis: { $ref: "#/components/schemas/CounterfactualAnalysis" }
+        causal_reasoning: { $ref: "#/components/schemas/CausalReasoning" }
       required: [evidence_report, knowledge_map, missing_info, conflicts, confidence_report, verification, logical_verification, reasoning_quality]
     SystemTrace:
       type: object

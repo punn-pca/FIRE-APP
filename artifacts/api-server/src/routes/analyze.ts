@@ -66,6 +66,9 @@ export interface EvidenceReport {
   items: EvidenceItem[];
   aggregate_score: number;
   coverage_score: number;
+  source_coverage?: Record<EvidenceItem["source"], number>;
+  source_diversity_score?: number;
+  supported_source_count?: number;
 }
 
 export interface ConflictFinding {
@@ -208,6 +211,44 @@ export interface DecisionMatrix {
   selected_option: string;
   selected_score: number;
   selection_reason: string;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
+}
+
+export interface CounterfactualComparison {
+  option_id: string;
+  condition: string;
+  baseline_score: number;
+  counterfactual_score: number;
+  delta: number;
+  outcome: string;
+  evidence_ids: string[];
+}
+
+export interface CounterfactualAnalysis {
+  methodology: string;
+  baseline_condition: string;
+  counterfactual_condition: string;
+  comparisons: CounterfactualComparison[];
+  most_robust_option: string;
+  sensitivity_score: number;
+}
+
+export interface CausalLink {
+  id: string;
+  cause: string;
+  effect: string;
+  mechanism: string;
+  relation: "contributes_to" | "constrains" | "moderates";
+  evidence_ids: string[];
+  confidence: number;
+}
+
+export interface CausalReasoning {
+  methodology: string;
+  links: CausalLink[];
+  confounders: string[];
+  score: number;
 }
 
 export interface LogicalVerification {
@@ -316,6 +357,8 @@ export interface PCAState {
   dataflow: DataflowEdge[];
   memory_retrieval: MemoryRetrievalReport;
   decision_matrix: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   runtime_summary: RuntimeSummary;
@@ -387,6 +430,8 @@ export interface AnalystReport {
   logical_verification: LogicalVerification;
   reasoning_quality: ReasoningQualityMetrics;
   decision_matrix?: DecisionMatrix;
+  counterfactual_analysis?: CounterfactualAnalysis;
+  causal_reasoning?: CausalReasoning;
 }
 
 export interface SystemTrace {
@@ -543,10 +588,12 @@ function buildReasoningTrace(
       state.intent.type === "decision" ? "reasoning-decision" : "reasoning-route",
       state.intent.type === "decision" ? "Decision" : "Intent Router",
       state.intent.type === "decision"
-        ? "เปรียบเทียบทางเลือกด้วยเกณฑ์และน้ำหนักที่คำนวณได้"
+        ? "เปรียบเทียบทางเลือกด้วย Cost, Benefit, Risk, Reversibility, evidence และ stress-tested counterfactual"
         : "เลือก pipeline ที่เหมาะสมโดยไม่สร้างทางเลือกการตัดสินใจเกินจำเป็น",
       ["evidence_report", "critique", "intent"],
-      state.intent.type === "decision" ? ["decision_matrix", "selected_option"] : ["route_constraints"],
+      state.intent.type === "decision"
+        ? ["decision_matrix", "counterfactual_analysis", "causal_reasoning", "selected_option"]
+        : ["route_constraints"],
       { evidence_ids: evidenceIds, limitation_ids: limitationIds },
     ),
     step(
@@ -614,6 +661,12 @@ export function buildReportLayers(state: PCAState): ReportLayers {
       logical_verification: state.logical_verification,
       reasoning_quality: state.reasoning_quality,
       ...(state.intent.type === "decision" ? { decision_matrix: state.decision_matrix } : {}),
+      ...(state.intent.type === "decision" && state.counterfactual_analysis
+        ? { counterfactual_analysis: state.counterfactual_analysis }
+        : {}),
+      ...(state.intent.type === "decision" && state.causal_reasoning
+        ? { causal_reasoning: state.causal_reasoning }
+        : {}),
     },
     system_trace: {
       notes: state.notes,
@@ -996,17 +1049,45 @@ export function buildEvidenceReport(
   const aggregate_score = items.length
     ? Number((items.reduce((sum, item) => sum + item.composite_score, 0) / items.length).toFixed(3))
     : 0;
+  const supportedItems = items.filter((item) => item.source !== "user_input");
+  const sourceCoverage = (source: EvidenceItem["source"]): number => {
+    const candidates = source === "knowledge_base"
+      ? conceptualKnowledge.filter((entry) => entry.matches.test(question)).length
+      : source === "conversation_history"
+        ? history.length
+        : source === "memory"
+          ? memories.length
+          : 1;
+    const matched = supportedItems.filter((item) => item.source === source).length;
+    return candidates > 0 ? Number(clamp01(matched / candidates).toFixed(3)) : 0;
+  };
+  const source_coverage = {
+    user_input: 0,
+    conversation_history: sourceCoverage("conversation_history"),
+    memory: sourceCoverage("memory"),
+    knowledge_base: sourceCoverage("knowledge_base"),
+  };
+  const supportedSourceCount = Object.entries(source_coverage)
+    .filter(([source, score]) => source !== "user_input" && score > 0)
+    .length;
+  const availableSourceCount = [
+    history.length > 0,
+    memories.length > 0,
+    conceptualKnowledge.some((entry) => entry.matches.test(question)),
+  ].filter(Boolean).length;
   const coverage_score = Number(
     clamp01(
-      items.filter((item) => item.source !== "user_input" && item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).length /
-      (history.length > 0 || memories.length > 0 ? 3 : 1)
+      availableSourceCount > 0 ? supportedSourceCount / availableSourceCount : 0
     ).toFixed(3)
   );
   return {
-    methodology: "composite = relevance×0.45 + source_quality×0.35 + consistency×0.20; user_input is context, while knowledge_base/history/memory can support claims",
+    methodology: "composite = relevance×0.45 + source_quality×0.35 + consistency×0.20; coverage = supported source families / available non-user source families; user_input is context only",
     items,
     aggregate_score,
     coverage_score,
+    source_coverage,
+    source_diversity_score: Number(clamp01(supportedSourceCount / 3).toFixed(3)),
+    supported_source_count: supportedSourceCount,
   };
 }
 
@@ -1836,9 +1917,11 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
     : clamp01(1 - state.missing_info.length * 0.2);
   const conflictRisk = clamp01(state.conflict_findings.length * 0.2);
   const criteria_weights = {
-    evidence_alignment: 0.4,
-    risk_control: 0.35,
-    feasibility: 0.25,
+    evidence_alignment: 0.25,
+    benefit: 0.2,
+    cost: 0.15,
+    risk: 0.25,
+    reversibility: 0.15,
   };
   const options: DecisionOption[] = [
     {
@@ -1849,8 +1932,10 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
         : "Best when evidence is sufficient, risk is low, and context is complete.",
       criteria: {
         evidence_alignment: Number((evidenceScore * 0.9).toFixed(3)),
-        risk_control: Number(clamp01(0.55 - conflictRisk).toFixed(3)),
-        feasibility: Number(clamp01(0.85 * contextScore).toFixed(3)),
+        benefit: Number(clamp01(0.8 * evidenceScore + 0.2 * contextScore).toFixed(3)),
+        cost: Number(clamp01(0.8 - 0.25 * conflictRisk).toFixed(3)),
+        risk: Number(clamp01(0.55 - conflictRisk - state.missing_info.length * 0.05).toFixed(3)),
+        reversibility: 0.25,
       },
       weighted_score: 0,
       evidence_ids: state.evidence_report.items.slice(0, 3).map((item) => item.id),
@@ -1863,8 +1948,10 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
         : "Controls risk through staged execution, validation, and adjustment.",
       criteria: {
         evidence_alignment: Number(evidenceScore.toFixed(3)),
-        risk_control: Number(clamp01(0.85 - conflictRisk * 0.5).toFixed(3)),
-        feasibility: Number(clamp01(0.7 * contextScore + 0.15).toFixed(3)),
+        benefit: Number(clamp01(0.65 * evidenceScore + 0.35 * contextScore).toFixed(3)),
+        cost: Number(clamp01(0.65 - 0.1 * conflictRisk).toFixed(3)),
+        risk: Number(clamp01(0.82 - conflictRisk * 0.5).toFixed(3)),
+        reversibility: 0.8,
       },
       weighted_score: 0,
       evidence_ids: state.evidence_report.items.filter((item) => item.composite_score >= 0.55).slice(0, 4).map((item) => item.id),
@@ -1877,8 +1964,10 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
         : "Best when information is missing, risk is high, or evidence is inconsistent.",
       criteria: {
         evidence_alignment: Number(clamp01(1 - evidenceScore * 0.5).toFixed(3)),
-        risk_control: Number(clamp01(0.95 - conflictRisk * 0.2).toFixed(3)),
-        feasibility: Number(clamp01(0.45 + (1 - contextScore) * 0.25).toFixed(3)),
+        benefit: Number(clamp01(0.35 + (1 - evidenceScore) * 0.35).toFixed(3)),
+        cost: 0.9,
+        risk: Number(clamp01(0.95 - conflictRisk * 0.2).toFixed(3)),
+        reversibility: 0.98,
       },
       weighted_score: 0,
       evidence_ids: state.evidence_report.items.filter((item) => item.relevance_score >= MEMORY_RELEVANCE_THRESHOLD).slice(0, 3).map((item) => item.id),
@@ -1887,19 +1976,125 @@ export function buildDecisionMatrix(state: PCAState, critiqueScore: number): Dec
   for (const option of options) {
     option.weighted_score = Number((
       option.criteria.evidence_alignment * criteria_weights.evidence_alignment +
-      option.criteria.risk_control * criteria_weights.risk_control +
-      option.criteria.feasibility * criteria_weights.feasibility
+      option.criteria.benefit * criteria_weights.benefit +
+      option.criteria.cost * criteria_weights.cost +
+      option.criteria.risk * criteria_weights.risk +
+      option.criteria.reversibility * criteria_weights.reversibility
     ).toFixed(3));
   }
   const selected = [...options].sort((a, b) => b.weighted_score - a.weighted_score)[0];
   const strongestCriterion = Object.entries(selected.criteria).sort(([, a], [, b]) => b - a)[0];
+  const causal_reasoning = buildCausalReasoning(state);
+  const counterfactual_analysis = buildCounterfactualAnalysis(state, options, criteria_weights);
   return {
-    methodology: "weighted multi-criteria matrix: evidence alignment×0.40 + risk control×0.35 + feasibility×0.25",
+    methodology: "weighted multi-criteria matrix: evidence alignment×0.25 + benefit×0.20 + cost efficiency×0.15 + risk control×0.25 + reversibility×0.15",
     criteria_weights,
     options,
     selected_option: selected.id,
     selected_score: selected.weighted_score,
-    selection_reason: `เลือก ${selected.label} เพราะ weighted score ${selected.weighted_score.toFixed(3)} สูงสุด โดย ${strongestCriterion[0]}=${strongestCriterion[1].toFixed(3)}; critique=${critiqueScore.toFixed(3)}, evidence=${evidenceScore.toFixed(3)}`,
+    selection_reason: `เลือก ${selected.label} เพราะ weighted score ${selected.weighted_score.toFixed(3)} สูงสุด โดย ${strongestCriterion[0]}=${strongestCriterion[1].toFixed(3)}; critique=${critiqueScore.toFixed(3)}, evidence=${evidenceScore.toFixed(3)}, counterfactual sensitivity=${counterfactual_analysis.sensitivity_score.toFixed(3)}`,
+    counterfactual_analysis,
+    causal_reasoning,
+  };
+}
+
+export function buildCausalReasoning(state: PCAState): CausalReasoning {
+  const nonUserEvidence = state.evidence_report.items.filter((item) => item.source !== "user_input");
+  const evidenceIds = nonUserEvidence.slice(0, 5).map((item) => item.id);
+  const links: CausalLink[] = [];
+
+  if (evidenceIds.length > 0) {
+    links.push({
+      id: "cause-evidence-to-confidence",
+      cause: "หลักฐานจากแหล่งที่ไม่ใช่ user input",
+      effect: "ความมั่นใจและน้ำหนักของข้อสรุปเพิ่มขึ้น",
+      mechanism: "relevance, quality และ consistency รวมเป็น composite evidence score",
+      relation: "contributes_to",
+      evidence_ids: evidenceIds,
+      confidence: Number(state.evidence_report.aggregate_score.toFixed(3)),
+    });
+  }
+  if (state.memory_retrieval.matched_count > 0) {
+    links.push({
+      id: "cause-memory-to-context",
+      cause: "memory ที่เกี่ยวข้องกับคำถาม",
+      effect: "บริบทของทางเลือกและข้อจำกัดมีความเฉพาะเจาะจงขึ้น",
+      mechanism: "retrieved memory ถูกจัดอันดับแล้วส่งเข้า evidence evaluation และ communication prompt",
+      relation: "contributes_to",
+      evidence_ids: nonUserEvidence
+        .filter((item) => item.source === "memory")
+        .map((item) => item.id),
+      confidence: Number(clamp01(state.memory_retrieval.hits[0]?.retrieval_score ?? 0).toFixed(3)),
+    });
+  }
+  if (state.missing_info.length > 0 || state.conflict_findings.length > 0) {
+    links.push({
+      id: "cause-uncertainty-to-risk",
+      cause: "ข้อมูลที่ขาดหรือสัญญาณขัดแย้ง",
+      effect: "ความเสี่ยงเพิ่มขึ้นและลดความเหมาะสมของการดำเนินการทันที",
+      mechanism: "missing information และ conflicts ลด risk criteria ใน matrix",
+      relation: "constrains",
+      evidence_ids: state.conflict_findings.map((finding) => finding.id),
+      confidence: Number(clamp01(0.65 + state.conflict_findings.length * 0.1).toFixed(3)),
+    });
+  }
+
+  const confounders = [
+    ...state.missing_info,
+    ...state.hypotheses.map((hypothesis) => hypothesis.claim),
+  ].slice(0, 5);
+  return {
+    methodology: "causal map from observed evidence, retrieved memory, missing information, and conflicts; correlation is not treated as causation",
+    links,
+    confounders,
+    score: Number(clamp01(
+      links.length === 0
+        ? 0
+        : links.reduce((sum, link) => sum + link.confidence, 0) / links.length
+    ).toFixed(3)),
+  };
+}
+
+export function buildCounterfactualAnalysis(
+  state: PCAState,
+  options: DecisionOption[],
+  weights: Record<string, number>,
+): CounterfactualAnalysis {
+  const baselineCondition = "ข้อมูลและข้อจำกัดตามปัจจุบัน";
+  const counterfactualCondition = "ถ้าหลักฐานที่สนับสนุนลดลง 0.20 และความเสี่ยงจากบริบทเพิ่มขึ้น 0.20";
+  const comparisons = options.map((option) => {
+    const counterfactualCriteria = { ...option.criteria };
+    counterfactualCriteria.evidence_alignment = clamp01(
+      counterfactualCriteria.evidence_alignment - 0.2
+    );
+    counterfactualCriteria.benefit = clamp01(counterfactualCriteria.benefit - 0.15);
+    counterfactualCriteria.risk = clamp01(counterfactualCriteria.risk - 0.2);
+    const counterfactual_score = Number(Object.entries(weights).reduce(
+      (sum, [criterion, weight]) => sum + (counterfactualCriteria[criterion] ?? 0) * weight,
+      0,
+    ).toFixed(3));
+    return {
+      option_id: option.id,
+      condition: counterfactualCondition,
+      baseline_score: option.weighted_score,
+      counterfactual_score,
+      delta: Number((counterfactual_score - option.weighted_score).toFixed(3)),
+      outcome: counterfactual_score >= 0.55
+        ? "ยังมีความยืดหยุ่นภายใต้เงื่อนไขที่แย่ลง"
+        : "ความเหมาะสมลดลง ควรเก็บข้อมูลเพิ่ม",
+      evidence_ids: option.evidence_ids,
+    };
+  });
+  const robust = [...comparisons].sort((a, b) => b.counterfactual_score - a.counterfactual_score)[0];
+  const selected = [...options].sort((a, b) => b.weighted_score - a.weighted_score)[0];
+  const selectedDelta = comparisons.find((item) => item.option_id === selected?.id)?.delta ?? 0;
+  return {
+    methodology: "one-factor stress test: reduce evidence and benefit, increase risk penalty, then recompute the same weighted matrix",
+    baseline_condition: baselineCondition,
+    counterfactual_condition: counterfactualCondition,
+    comparisons,
+    most_robust_option: robust?.option_id ?? "",
+    sensitivity_score: Number(clamp01(1 - Math.abs(selectedDelta)).toFixed(3)),
   };
 }
 
@@ -1975,6 +2170,150 @@ export function buildLogicalVerification(state: PCAState, responseText: string):
         : "พบคำตอบตรงประเด็นตาม intent route"
       : "ไม่พบโครงสร้างคำตอบที่สอดคล้องกับ intent route",
     score: conclusionConsistent ? 1 : 0,
+  });
+
+  const selectedEvidenceIds = state.intent.type === "decision"
+    ? state.decision_matrix.options.find(
+      (option) => option.id === state.decision_matrix.selected_option
+    )?.evidence_ids ?? []
+    : state.evidence_report.items
+      .filter((item) => item.source !== "user_input")
+      .slice(0, 3)
+      .map((item) => item.id);
+  const validEvidenceIds = new Set(
+    state.evidence_report.items
+      .filter((item) => item.source !== "user_input")
+      .map((item) => item.id)
+  );
+  const supportedConclusionIds = selectedEvidenceIds.filter((id) => validEvidenceIds.has(id));
+  const citedConclusionIds = supportedConclusionIds.filter((id) =>
+    responseText.includes(`[หลักฐาน: ${id}]`)
+  );
+  const conclusionSupportScore = selectedEvidenceIds.length === 0
+    ? validEvidenceIds.size === 0 ? 1 : 0
+    : citedConclusionIds.length / selectedEvidenceIds.length;
+  checks.push({
+    criterion: "claim_level_support",
+    rule: "ข้อสรุปต้องมี evidence IDs ที่มีอยู่จริงและอ้างถึงหลักฐานที่รองรับ ไม่ใช่เพียงมี label",
+    passed: selectedEvidenceIds.length === 0
+      ? validEvidenceIds.size === 0
+      : supportedConclusionIds.length === selectedEvidenceIds.length &&
+        conclusionSupportScore >= 0.6,
+    evidence: `${citedConclusionIds.length}/${selectedEvidenceIds.length} conclusion evidence IDs ถูกอ้างใน response; valid=${supportedConclusionIds.length}/${selectedEvidenceIds.length}`,
+    score: Number(clamp01(
+      selectedEvidenceIds.length === 0
+        ? validEvidenceIds.size === 0 ? 1 : 0
+        : Math.min(
+          supportedConclusionIds.length / selectedEvidenceIds.length,
+          conclusionSupportScore
+        )
+    ).toFixed(3)),
+  });
+
+  const matrix = state.decision_matrix;
+  const matrixArithmetic = state.intent.type !== "decision" || (
+    matrix.options.length > 0 &&
+    matrix.options.every((option) => {
+      const recomputed = Object.entries(matrix.criteria_weights).reduce(
+        (sum, [criterion, weight]) => sum + (option.criteria[criterion] ?? 0) * weight,
+        0,
+      );
+      return Math.abs(recomputed - option.weighted_score) <= 0.006;
+    }) &&
+    matrix.options.some((option) =>
+      option.id === matrix.selected_option &&
+      Math.abs(option.weighted_score - matrix.selected_score) <= 0.006
+    ) &&
+    matrix.selected_score >= Math.max(...matrix.options.map((option) => option.weighted_score)) - 0.006
+  );
+  checks.push({
+    criterion: "decision_matrix_arithmetic",
+    rule: "คะแนนทางเลือกและ selected score ต้องคำนวณซ้ำได้จาก criteria × weights และ selected ต้องไม่ต่ำกว่าทางเลือกอื่น",
+    passed: matrixArithmetic,
+    evidence: state.intent.type !== "decision"
+      ? "ข้าม arithmetic เพราะไม่ใช่ decision route"
+      : matrixArithmetic
+        ? "recomputed weighted scores ตรงกับ matrix"
+        : "recomputed weighted score หรือ selected winner ไม่ตรงกับ matrix",
+    score: matrixArithmetic ? 1 : 0,
+  });
+
+  const counterfactual = state.counterfactual_analysis;
+  const counterfactualArithmetic = state.intent.type !== "decision" || !counterfactual
+    ? state.intent.type !== "decision"
+    : counterfactual.comparisons.length === matrix.options.length &&
+      counterfactual.comparisons.every((comparison) => {
+        const option = matrix.options.find((candidate) => candidate.id === comparison.option_id);
+        if (!option) return false;
+        const criteria = { ...option.criteria };
+        criteria.evidence_alignment = clamp01(criteria.evidence_alignment - 0.2);
+        criteria.benefit = clamp01(criteria.benefit - 0.15);
+        criteria.risk = clamp01(criteria.risk - 0.2);
+        const expected = Number(Object.entries(matrix.criteria_weights).reduce(
+          (sum, [criterion, weight]) => sum + (criteria[criterion] ?? 0) * weight,
+          0,
+        ).toFixed(3));
+        return Math.abs(expected - comparison.counterfactual_score) <= 0.006 &&
+          Math.abs(
+            comparison.delta - (comparison.counterfactual_score - comparison.baseline_score)
+          ) <= 0.006;
+      }) &&
+      counterfactual.most_robust_option === [...counterfactual.comparisons]
+        .sort((a, b) => b.counterfactual_score - a.counterfactual_score)[0]?.option_id;
+  checks.push({
+    criterion: "counterfactual_consistency",
+    rule: "ผลลัพธ์เมื่อเปลี่ยนเงื่อนไขต้อง recompute จาก matrix เดิม และระบุทางเลือกที่ robust ที่สุดถูกต้อง",
+    passed: counterfactualArithmetic,
+    evidence: state.intent.type !== "decision"
+      ? "ข้าม counterfactual เพราะไม่ใช่ decision route"
+      : counterfactualArithmetic
+        ? "counterfactual scores, deltas และ robust option ตรวจซ้ำได้"
+        : "counterfactual calculation ไม่สอดคล้องกับ baseline matrix",
+    score: counterfactualArithmetic ? 1 : 0,
+  });
+
+  const causal = state.causal_reasoning;
+  const causalTraceability = state.intent.type !== "decision" || !causal
+    ? state.intent.type !== "decision"
+    : causal.links.every((link) =>
+      link.confidence >= 0 &&
+      link.confidence <= 1 &&
+      link.evidence_ids.every((id) => validEvidenceIds.has(id))
+    ) && causal.score >= 0 && causal.score <= 1;
+  checks.push({
+    criterion: "causal_traceability",
+    rule: "ทุก causal link ต้องมี mechanism, confidence อยู่ในช่วง และชี้กลับไปยัง evidence ที่มีจริง",
+    passed: causalTraceability,
+    evidence: state.intent.type !== "decision"
+      ? "ข้าม causal traceability เพราะไม่ใช่ decision route"
+      : causalTraceability
+        ? `${causal?.links.length ?? 0} causal links มี mechanism และ traceable evidence`
+        : "พบ causal link ที่ confidence หรือ evidence reference ไม่ถูกต้อง",
+    score: causalTraceability ? 1 : 0,
+  });
+
+  const sourceCoverage = state.evidence_report.source_coverage ?? (
+    state.evidence_report.items.reduce<Record<EvidenceItem["source"], number>>((coverage, item) => {
+      if (item.source !== "user_input") coverage[item.source] = 1;
+      return coverage;
+    }, {
+      user_input: 0,
+      conversation_history: 0,
+      memory: 0,
+      knowledge_base: 0,
+    })
+  );
+  const nonUserSources = Object.entries(sourceCoverage)
+    .filter(([source, score]) => source !== "user_input" && Number(score) > 0);
+  const evidenceCoverageScore = state.evidence_report.source_diversity_score ?? (
+    Number(clamp01(nonUserSources.length / 3).toFixed(3))
+  );
+  checks.push({
+    criterion: "evidence_coverage",
+    rule: "ข้อสรุปควรใช้แหล่งข้อมูล non-user ที่เกี่ยวข้องหลายแหล่งเมื่อมีให้ใช้",
+    passed: validEvidenceIds.size === 0 || evidenceCoverageScore > 0,
+    evidence: `${nonUserSources.length} source families covered; coverage=${evidenceCoverageScore.toFixed(3)}`,
+    score: Number(clamp01(validEvidenceIds.size === 0 ? 1 : evidenceCoverageScore).toFixed(3)),
   });
 
   const score = checks.reduce((sum, check) => sum + check.score, 0) / checks.length;
@@ -2411,6 +2750,8 @@ function stageDecision(
   const evidenceScore = state.evidence_report.aggregate_score;
   const critiqueScore = state.module_audit.find((audit) => audit.module === "Critique")?.score ?? 0;
   state.decision_matrix = buildDecisionMatrix(state, critiqueScore);
+  state.counterfactual_analysis = state.decision_matrix.counterfactual_analysis;
+  state.causal_reasoning = state.decision_matrix.causal_reasoning;
   const aggregationScore = state.intent.type === "decision"
     ? Number(
       (state.decision_matrix.selected_score * 0.6 + critiqueScore * 0.4 - conflictFindings.length * 0.1).toFixed(3)
@@ -2531,7 +2872,9 @@ export function buildSystemPrompt(
   // Long-term memory store
   const memorySection =
     state.memories.length > 0
-      ? `\nMemory Context:\n${state.memories.map((m, i) => `${i + 1}. [${m.layer}] ${m.content}`).join("\n")}`
+      ? `\nMemory Context (ใช้เฉพาะรายการที่ retrieval score ผ่าน threshold และเกี่ยวข้องกับคำถาม):
+${state.memories.map((m, i) => `${i + 1}. [${m.layer}] retrieval=${(m.retrieval_score ?? 0).toFixed(3)} confidence=${m.confidence.toFixed(3)} ${m.content}`).join("\n")}
+ห้ามถือ memory เป็นข้อเท็จจริงสากล ให้ใช้เป็นบริบทส่วนบุคคล/ประวัติที่เกี่ยวข้อง และลดความมั่นใจหาก memory ขัดแย้งกับหลักฐานอื่น`
       : "";
 
   const personalCtx = personalContext ? `\nUser Personal Context: ${personalContext}` : "";
@@ -2566,7 +2909,12 @@ ${allowedEvidence.map((item) =>
 - selected option: ${state.decision_matrix.selected_option} — ${state.decision_matrix.options.find((option) => option.id === state.decision_matrix.selected_option)?.label ?? "ไม่ระบุ"}
 - decision matrix reason: ${state.decision_matrix.selection_reason}
 - alternatives: ${state.decision_matrix.options.map((option) => `${option.id}=${option.label} (${option.weighted_score.toFixed(3)})`).join("; ")}
+- criteria: ${Object.entries(state.decision_matrix.criteria_weights).map(([criterion, weight]) => `${criterion}=${weight.toFixed(2)}`).join("; ")}
+- counterfactual: ${state.counterfactual_analysis?.counterfactual_condition ?? "not available"}
+- most robust under counterfactual: ${state.counterfactual_analysis?.most_robust_option ?? "not available"}
+- causal reasoning: ${state.causal_reasoning?.links.map((link) => `${link.cause} -> ${link.effect} (confidence=${link.confidence.toFixed(3)})`).join("; ") || "not available"}
 - ต้องกล่าวถึง selected option หรือ label ของทางเลือกที่เลือกในข้อสรุป และอธิบาย trade-off กับทางเลือกอื่น
+- ข้อสรุปทุกข้อที่เป็น factual หรือ causal claim ต้องผูกกับ evidence ID ที่มีจริง; ถ้าไม่มีหลักฐานให้ระบุว่าเป็นสมมติฐาน/ข้อจำกัด
 - confidence ต้องไม่เกินระดับที่หลักฐานรองรับ และผู้ใช้เป็นผู้ตัดสินใจขั้นสุดท้าย`
     : `
 ข้อกำหนดจาก Intent Router:
@@ -3332,6 +3680,8 @@ router.post("/", async (req, res) => {
         dataflow: state.dataflow,
         memory_retrieval: state.memory_retrieval,
         decision_matrix: state.decision_matrix,
+         counterfactual_analysis: state.counterfactual_analysis,
+         causal_reasoning: state.causal_reasoning,
         logical_verification: state.logical_verification,
          reasoning_quality: state.reasoning_quality,
          runtime_summary: state.runtime_summary,
