@@ -56,3 +56,15 @@ Keep normal and legacy report export controls on one renderer, and preserve the 
 **Why:** The two data shapes need different placement, but duplicated controls drifted in labels and accessibility behavior; popup blocking is actionable only when the user is told to allow pop-ups.
 
 **How to apply:** Call the shared renderer from the visible `reports` path and the legacy PCA metadata path. Wrap web HTML/PDF actions so popup errors explain the browser setting while native HTML retains its clipboard recovery.
+
+High-level reasoning audits should expose structured, inspectable summaries rather than private model chain-of-thought.
+
+**Why:** Firekeeper needs to be reviewable as an evaluation system while preserving the separation between a user answer and internal model deliberation.
+
+**How to apply:** Build Analyst Report fields for evidence, assumptions, summarized reasoning trace, limitations, and verification criteria. Give each item stable IDs and cross-reference evidence, assumption, limitation, and verification IDs; show the same contract in mobile UI and Analyst HTML/PDF exports.
+
+Research evaluation must score externally derived truth separately from the model's self-reported labels.
+
+**Why:** A live evaluation showed that a model can calculate the correct ground-truth value while emitting an incorrect `truth_assessment`; conflating the two falsely lowers Truth Accuracy.
+
+**How to apply:** Let Truth Accuracy compare answer content with Truth Engine outputs, while Explanation Consistency reports self-label/trace alignment and Self Calibration compares declared confidence with empirical accuracy.

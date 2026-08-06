@@ -25,6 +25,8 @@ import {
   normalizeUserFacingResponse,
   classifyIntent,
   buildReportLayers,
+  buildResearchScenario,
+  buildResearchEvaluation,
   type PCAState,
   type ConversationTurn,
   type ContextValidation,
@@ -471,6 +473,19 @@ describe("buildReportLayers — separated output contract", () => {
   assert("Confidence is shared across reports", reports.confidence_summary.score === state.confidence_report.score);
   assert("Decision Matrix is analyst-only", reports.analyst_report.decision_matrix !== undefined);
   assert("User Report does not expose decision matrix", !("decision_matrix" in reports.user_report));
+  assert("Analyst Report has explicit assumptions", reports.analyst_report.assumptions.length === state.hypotheses.length);
+  assert("Analyst Report has reasoning trace", reports.analyst_report.reasoning_trace.length >= 6);
+  assert("Reasoning trace references evidence", reports.analyst_report.reasoning_trace.some(
+    (step) => step.stage === "Evidence Evaluation" && step.evidence_ids.length === state.evidence_report.items.length
+  ));
+  assert("Analyst Report has limitations", reports.analyst_report.limitations.length > 0);
+  assert("Analyst Report has verification criteria", reports.analyst_report.verification_criteria.length === (
+    state.verification.detailed_checks.length + state.logical_verification.checks.length
+  ));
+  assert("Verification criteria IDs are referenced by trace", reports.analyst_report.reasoning_trace.some(
+    (step) => step.stage === "Verification" &&
+      step.verification_ids.length === reports.analyst_report.verification_criteria.length
+  ));
 
   const explanatory = { ...state, intent: classifyIntent("รักคืออะไร") };
   const explanatoryReports = buildReportLayers(explanatory);
@@ -478,6 +493,41 @@ describe("buildReportLayers — separated output contract", () => {
     "Explanatory User Report does not inherit decision matrix",
     explanatoryReports.analyst_report.decision_matrix === undefined
   );
+});
+
+describe("Research Evaluation Framework — generated truth and adversarial tests", () => {
+  const scenario = buildResearchScenario("regression");
+  const completion = {
+    model: "test-model",
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          answer: "น้ำหนักคือ 196.20 N",
+          truth_assessment: "true",
+          rejected_plausibility: true,
+          counterfactual_answer: "น้ำหนักใหม่คือ 49.05 N",
+          confidence: 92,
+          reasoning_trace: [
+            { step: "derive", claim: "ใช้ W = m × g_baseline × gravity_ratio", support: "truth" },
+            { step: "counterfactual", claim: "แทนค่า gravity ratio ใหม่ในกฎเดิม", support: "counterfactual" },
+          ],
+        }),
+      },
+    }],
+  } as never;
+  const evaluation = buildResearchEvaluation(scenario, completion, "2026-08-06T00:00:00.000Z");
+  assert("Truth Source is derived from generated world", evaluation.modules.truth_source.claims.length === 2);
+  assert("Truth Engine computes 2G weight", evaluation.modules.truth_engine.derived_values.world_weight_n === 196.2);
+  assert("Plausibility Generator marks claim false", evaluation.modules.plausibility_generator.expected_label === "false");
+  assert("Counterfactual Generator computes 0.5G weight", evaluation.modules.counterfactual_generator.expected_value === 49.05);
+  assert("Explanation Consistency is explicit", evaluation.modules.explanation_consistency.score > 0);
+  assert("Self Calibration is explicit", evaluation.modules.self_calibration.declared_confidence === 92);
+  assert("Truth accuracy is perfect for correct test response", evaluation.evaluation_layer.metrics.truth_accuracy === 1);
+  assert("Reasoning trace is consistent with truth rule", evaluation.evaluation_layer.metrics.reasoning_quality === 1);
+  assert("Calibration error compares declared confidence to outcome", evaluation.evaluation_layer.metrics.calibration_error === 0.08);
+  assert("All evaluation metrics remain bounded", Object.values(evaluation.evaluation_layer.metrics).every(
+    (value) => value >= 0 && value <= 1
+  ));
 });
 
 describe("buildConfidenceReport — history and memory are separate", () => {

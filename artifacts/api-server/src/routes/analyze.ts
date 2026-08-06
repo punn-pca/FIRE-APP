@@ -342,9 +342,44 @@ export interface UserReport {
   next_step?: string;
 }
 
+export interface AuditAssumption {
+  id: string;
+  statement: string;
+  confidence: number;
+  basis: string;
+}
+
+export interface AuditLimitation {
+  id: string;
+  description: string;
+  impact: string;
+  mitigation: string;
+}
+
+export interface ReasoningTraceStep {
+  id: string;
+  stage: string;
+  purpose: string;
+  inputs: string[];
+  outputs: string[];
+  evidence_ids: string[];
+  assumption_ids: string[];
+  limitation_ids: string[];
+  verification_ids: string[];
+}
+
+export interface VerificationCriterion extends VerificationCheck {
+  id: string;
+  source: "verification" | "logical_verification";
+}
+
 export interface AnalystReport {
   evidence_report: EvidenceReport;
   knowledge_map: KnowledgeMap;
+  assumptions: AuditAssumption[];
+  reasoning_trace: ReasoningTraceStep[];
+  limitations: AuditLimitation[];
+  verification_criteria: VerificationCriterion[];
   missing_info: string[];
   conflicts: ConflictFinding[];
   confidence_report: ConfidenceReport;
@@ -405,10 +440,155 @@ function buildExecutiveSummary(state: PCAState): string {
   return parts.join("\n\n");
 }
 
+function buildAuditAssumptions(state: PCAState): AuditAssumption[] {
+  return state.hypotheses.map((hypothesis, index) => ({
+    id: `assumption-${index + 1}`,
+    statement: hypothesis.claim,
+    confidence: Number(hypothesis.confidence.toFixed(3)),
+    basis: "Hypothesis stage จากข้อมูลและบริบทที่มีอยู่",
+  }));
+}
+
+function buildAuditLimitations(state: PCAState): AuditLimitation[] {
+  const limitations: AuditLimitation[] = state.missing_info.map((item, index) => ({
+    id: `limitation-missing-${index + 1}`,
+    description: item,
+    impact: "ข้อมูลไม่ครบอาจทำให้ข้อสรุปหรือการประเมินความเสี่ยงคลาดเคลื่อน",
+    mitigation: "เก็บข้อมูลนี้เพิ่มและทบทวนคำตอบก่อนนำไปใช้ตัดสินใจ",
+  }));
+
+  state.conflict_findings.forEach((finding) => {
+    limitations.push({
+      id: `limitation-conflict-${finding.id}`,
+      description: finding.evidence,
+      impact: `มีความขัดแย้งระดับ${finding.severity} จึงลดความมั่นใจในข้อสรุป`,
+      mitigation: "ตรวจสอบแหล่งข้อมูลและยืนยันสัญญาณที่ขัดแย้งก่อนดำเนินการ",
+    });
+  });
+
+  if (limitations.length === 0 && state.evidence_report.items.every((item) => item.source === "user_input")) {
+    limitations.push({
+      id: "limitation-user-context-only",
+      description: "ยังไม่มีหลักฐานภายนอกหรือ memory ที่เกี่ยวข้องเพียงพอ",
+      impact: "การประเมินอาศัยบริบทจากผู้ใช้เป็นหลัก จึงไม่ควรถือเป็นการยืนยันข้อเท็จจริง",
+      mitigation: "เพิ่มแหล่งข้อมูลที่ตรวจสอบได้ก่อนใช้คำตอบเป็นข้อสรุปสำคัญ",
+    });
+  }
+
+  return limitations;
+}
+
+function buildReasoningTrace(
+  state: PCAState,
+  assumptions: AuditAssumption[],
+  limitations: AuditLimitation[],
+): ReasoningTraceStep[] {
+  const evidenceIds = state.evidence_report.items.map((item) => item.id);
+  const assumptionIds = assumptions.map((assumption) => assumption.id);
+  const limitationIds = limitations.map((limitation) => limitation.id);
+  const verificationIds = state.verification.detailed_checks.map((check, index) => `verification-${index + 1}`)
+    .concat(state.logical_verification.checks.map((check, index) => `logical-verification-${index + 1}`));
+  const step = (
+    id: string,
+    stage: string,
+    purpose: string,
+    inputs: string[],
+    outputs: string[],
+    refs: Partial<Pick<ReasoningTraceStep, "evidence_ids" | "assumption_ids" | "limitation_ids" | "verification_ids">> = {},
+  ): ReasoningTraceStep => ({
+    id,
+    stage,
+    purpose,
+    inputs,
+    outputs,
+    evidence_ids: refs.evidence_ids ?? [],
+    assumption_ids: refs.assumption_ids ?? [],
+    limitation_ids: refs.limitation_ids ?? [],
+    verification_ids: refs.verification_ids ?? [],
+  });
+
+  return [
+    step(
+      "reasoning-observation",
+      "Observation",
+      "รับและทำให้ข้อมูลตั้งต้นเป็นสัญญาณที่วิเคราะห์ได้",
+      ["user_input", "conversation_history"],
+      ["observations", "language"],
+    ),
+    step(
+      "reasoning-understanding",
+      "Understanding",
+      "จำแนกเจตนาและกำหนดกรอบของคำถาม",
+      ["observations", "context_validation"],
+      ["intent", "understanding", "purpose"],
+      { assumption_ids: assumptionIds.slice(0, 1), limitation_ids: limitationIds },
+    ),
+    step(
+      "reasoning-evidence",
+      "Evidence Evaluation",
+      "รวบรวม จัดอันดับ และให้คะแนนหลักฐานที่มีอยู่",
+      ["conversation_history", "memory_retrieval", "user_context"],
+      ["evidence_report", "aggregate_score", "coverage_score"],
+      { evidence_ids: evidenceIds },
+    ),
+    step(
+      "reasoning-critique",
+      "Critique",
+      "ตรวจหาข้อมูลที่ขาด ความขัดแย้ง และความไม่แน่นอน",
+      ["evidence_report", "knowledge_map", "hypotheses"],
+      ["missing_info", "conflict_findings", "uncertainty"],
+      { evidence_ids: evidenceIds, assumption_ids: assumptionIds, limitation_ids: limitationIds },
+    ),
+    step(
+      state.intent.type === "decision" ? "reasoning-decision" : "reasoning-route",
+      state.intent.type === "decision" ? "Decision" : "Intent Router",
+      state.intent.type === "decision"
+        ? "เปรียบเทียบทางเลือกด้วยเกณฑ์และน้ำหนักที่คำนวณได้"
+        : "เลือก pipeline ที่เหมาะสมโดยไม่สร้างทางเลือกการตัดสินใจเกินจำเป็น",
+      ["evidence_report", "critique", "intent"],
+      state.intent.type === "decision" ? ["decision_matrix", "selected_option"] : ["route_constraints"],
+      { evidence_ids: evidenceIds, limitation_ids: limitationIds },
+    ),
+    step(
+      "reasoning-communication",
+      "Communication",
+      "สร้างคำตอบสำหรับผู้ใช้ตาม route, evidence และข้อจำกัด",
+      ["intent", "evidence_report", "limitations"],
+      ["response"],
+      { evidence_ids: evidenceIds, assumption_ids: assumptionIds, limitation_ids: limitationIds },
+    ),
+    step(
+      "reasoning-verification",
+      "Verification",
+      "ตรวจการอ้างหลักฐาน ความสอดคล้อง และ alignment ของคำตอบ",
+      ["response", "evidence_report", "decision_matrix"],
+      ["verification_status", "confidence_score"],
+      { evidence_ids: evidenceIds, limitation_ids: limitationIds, verification_ids: verificationIds },
+    ),
+  ];
+}
+
+function buildVerificationCriteria(state: PCAState): VerificationCriterion[] {
+  return [
+    ...state.verification.detailed_checks.map((check, index) => ({
+      ...check,
+      id: `verification-${index + 1}`,
+      source: "verification" as const,
+    })),
+    ...state.logical_verification.checks.map((check, index) => ({
+      ...check,
+      id: `logical-verification-${index + 1}`,
+      source: "logical_verification" as const,
+    })),
+  ];
+}
+
 export function buildReportLayers(state: PCAState): ReportLayers {
   const selected = state.decision_matrix.options.find(
     (option) => option.id === state.decision_matrix.selected_option
   );
+  const assumptions = buildAuditAssumptions(state);
+  const limitations = buildAuditLimitations(state);
   return {
     user_report: {
       answer: state.response,
@@ -423,6 +603,10 @@ export function buildReportLayers(state: PCAState): ReportLayers {
     analyst_report: {
       evidence_report: state.evidence_report,
       knowledge_map: state.knowledge_map,
+      assumptions,
+      reasoning_trace: buildReasoningTrace(state, assumptions, limitations),
+      limitations,
+      verification_criteria: buildVerificationCriteria(state),
       missing_info: state.missing_info,
       conflicts: state.conflict_findings,
       confidence_report: state.confidence_report,
@@ -2481,6 +2665,285 @@ interface AnalyzeRequest {
   memories?: PCAState["memories"];
   history?: ConversationTurn[]; // 1. Conversation Memory
 }
+
+export interface ResearchWorld {
+  id: string;
+  generator: string;
+  parameters: Record<string, number>;
+  rules: string[];
+}
+
+export interface ResearchTruthSource {
+  id: string;
+  provenance: string;
+  claims: string[];
+}
+
+export interface ResearchTestInstance {
+  id: string;
+  prompt: string;
+  expected_claims: string[];
+  plausibility_claim: string;
+  counterfactual_prompt: string;
+}
+
+export interface ResearchReasoningStep {
+  step: string;
+  claim: string;
+  support: "truth" | "counterfactual" | "rejected_plausibility" | "unknown";
+}
+
+export interface ResearchMetrics {
+  truth_accuracy: number;
+  reasoning_quality: number;
+  calibration_error: number;
+  robustness: number;
+  consistency: number;
+  generalization: number;
+  overall_score: number;
+}
+
+export interface ResearchEvaluation {
+  id: string;
+  generated_at: string;
+  modules: {
+    truth_source: ResearchTruthSource;
+    world_generator: ResearchWorld;
+    truth_engine: { formula: string; derived_values: Record<string, number> };
+    plausibility_generator: { claim: string; expected_label: "false" };
+    counterfactual_generator: { condition: string; expected_value: number };
+    explanation_consistency: {
+      trace_supports_answer: boolean;
+      truth_assessment_matches_answer: boolean;
+      score: number;
+    };
+    self_calibration: {
+      declared_confidence: number;
+      empirical_accuracy: number;
+      calibration_error: number;
+    };
+  };
+  test_instance: ResearchTestInstance;
+  ai_under_test: {
+    model: string;
+    answer: string;
+    truth_assessment: "true" | "false" | "mixed" | "unknown";
+    rejected_plausibility: boolean;
+    counterfactual_answer: string;
+    confidence: number;
+    reasoning_trace: ResearchReasoningStep[];
+  };
+  evaluation_layer: {
+    metrics: ResearchMetrics;
+    criteria: string[];
+    findings: string[];
+  };
+}
+
+interface ResearchEvaluateRequest {
+  seed?: string;
+}
+
+export function buildResearchScenario(seed = "gravity-2g-v1"): {
+  world: ResearchWorld;
+  truthSource: ResearchTruthSource;
+  truthEngine: { formula: string; derived_values: Record<string, number> };
+  plausibility: { claim: string; expected_label: "false" };
+  counterfactual: { condition: string; expected_value: number };
+  testInstance: ResearchTestInstance;
+} {
+  // Deterministic synthetic world: no human-authored answer key is needed at run time.
+  const baselineGravity = 9.81;
+  const gravityRatio = 2;
+  const massKg = 10;
+  const counterfactualRatio = 0.5;
+  const worldWeight = Number((massKg * baselineGravity * gravityRatio).toFixed(2));
+  const counterfactualWeight = Number((massKg * baselineGravity * counterfactualRatio).toFixed(2));
+  const baselineWeight = Number((massKg * baselineGravity).toFixed(2));
+  const world: ResearchWorld = {
+    id: `${seed}-world`,
+    generator: "Firekeeper World Generator v1 · deterministic synthetic physics",
+    parameters: {
+      baseline_gravity_g: baselineGravity,
+      gravity_ratio: gravityRatio,
+      mass_kg: massKg,
+      counterfactual_gravity_ratio: counterfactualRatio,
+    },
+    rules: ["weight_newtons = mass_kg × baseline_gravity_g × gravity_ratio"],
+  };
+  const truthSource: ResearchTruthSource = {
+    id: `${seed}-truth`,
+    provenance: "Truth Engine derived from generated world parameters and explicit rule",
+    claims: [
+      `น้ำหนักในโลกจำลอง = ${massKg} × ${baselineGravity} × ${gravityRatio} = ${worldWeight} N`,
+      `เมื่อเปลี่ยนแรงโน้มถ่วงเป็น ${counterfactualRatio}G น้ำหนัก = ${counterfactualWeight} N`,
+    ],
+  };
+  const plausibilityClaim = `น้ำหนักยังคง ${baselineWeight} N เพราะมวลของวัตถุไม่เปลี่ยน`;
+  return {
+    world,
+    truthSource,
+    truthEngine: {
+      formula: "W = m × g_baseline × gravity_ratio",
+      derived_values: { baseline_weight_n: baselineWeight, world_weight_n: worldWeight, counterfactual_weight_n: counterfactualWeight },
+    },
+    plausibility: { claim: plausibilityClaim, expected_label: "false" },
+    counterfactual: {
+      condition: `ถ้าแรงโน้มถ่วงเปลี่ยนเป็น ${counterfactualRatio}G`,
+      expected_value: counterfactualWeight,
+    },
+    testInstance: {
+      id: `${seed}-instance`,
+      prompt: `ในโลกจำลองนี้ วัตถุมวล ${massKg} kg อยู่ในแรงโน้มถ่วง ${gravityRatio}G โดย 1G = ${baselineGravity} m/s² น้ำหนักของวัตถุเป็นเท่าใด และประเมินข้อความนี้ว่าใช่หรือไม่: “${plausibilityClaim}”`,
+      expected_claims: [`${worldWeight} N`, "ข้อความ plausibility เป็นเท็จ"],
+      plausibility_claim: plausibilityClaim,
+      counterfactual_prompt: `ถ้าเงื่อนไขเปลี่ยนเป็นแรงโน้มถ่วง ${counterfactualRatio}G น้ำหนักใหม่ควรเป็นเท่าใด`,
+    },
+  };
+}
+
+function parseResearchJson(content: string): {
+  answer?: string;
+  truth_assessment?: ResearchEvaluation["ai_under_test"]["truth_assessment"];
+  rejected_plausibility?: boolean;
+  counterfactual_answer?: string;
+  confidence?: number;
+  reasoning_trace?: ResearchReasoningStep[];
+} {
+  const cleaned = content.replace(/```json|```/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return {};
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1)) as ReturnType<typeof parseResearchJson>;
+  } catch {
+    return {};
+  }
+}
+
+function containsNumber(text: string, value: number): boolean {
+  const normalized = text.replace(/,/g, "");
+  return normalized.includes(value.toFixed(2)) || normalized.includes(value.toFixed(1)) || normalized.includes(String(value));
+}
+
+export function buildResearchEvaluation(
+  scenario: ReturnType<typeof buildResearchScenario>,
+  completion: OpenAI.Chat.ChatCompletion,
+  generatedAt: string,
+): ResearchEvaluation {
+  const raw = completion.choices[0]?.message?.content ?? "";
+  const parsed = parseResearchJson(raw);
+  const answer = parsed.answer ?? raw;
+  const counterfactualAnswer = parsed.counterfactual_answer ?? "";
+  const trace = Array.isArray(parsed.reasoning_trace) ? parsed.reasoning_trace : [];
+  const truthAnswerCorrect = containsNumber(answer, scenario.truthEngine.derived_values.world_weight_n);
+  const truthAssessmentCorrect = parsed.truth_assessment === "true";
+  const plausibilityRejected = parsed.rejected_plausibility === true;
+  const counterfactualCorrect = containsNumber(counterfactualAnswer, scenario.counterfactual.expected_value);
+  const traceHasRule = trace.some((step) => /W\s*=|mass|มวล|แรงโน้มถ่วง|gravity/i.test(step.claim));
+  const traceSupportsAnswer = traceHasRule && truthAnswerCorrect;
+  const reasoningQuality = (Number(trace.length >= 2) + Number(traceHasRule) + Number(truthAnswerCorrect)) / 3;
+  // Truth Accuracy is scored against the generated Truth Engine, not a model
+  // self-label. The label is still evaluated below as explanation consistency.
+  const truthAccuracy = (Number(truthAnswerCorrect) + Number(plausibilityRejected) + Number(counterfactualCorrect)) / 3;
+  const confidence = Math.max(0, Math.min(100, Number(parsed.confidence ?? 0)));
+  const calibrationError = Number(Math.abs(confidence / 100 - truthAccuracy).toFixed(3));
+  const robustness = (Number(plausibilityRejected) + Number(counterfactualCorrect)) / 2;
+  const consistency = (
+    Number(traceSupportsAnswer) +
+    Number(truthAssessmentCorrect === truthAnswerCorrect) +
+    Number(counterfactualCorrect)
+  ) / 3;
+  const generalization = Number(counterfactualCorrect);
+  const overallScore = Number((
+    (truthAccuracy + reasoningQuality + robustness + consistency + generalization + (1 - calibrationError)) / 6
+  ).toFixed(3));
+  return {
+    id: `research-${Date.now()}`,
+    generated_at: generatedAt,
+    modules: {
+      truth_source: scenario.truthSource,
+      world_generator: scenario.world,
+      truth_engine: scenario.truthEngine,
+      plausibility_generator: scenario.plausibility,
+      counterfactual_generator: scenario.counterfactual,
+      explanation_consistency: {
+        trace_supports_answer: traceSupportsAnswer,
+        truth_assessment_matches_answer: truthAssessmentCorrect === truthAnswerCorrect,
+        score: Number(consistency.toFixed(3)),
+      },
+      self_calibration: {
+        declared_confidence: confidence,
+        empirical_accuracy: Number(truthAccuracy.toFixed(3)),
+        calibration_error: calibrationError,
+      },
+    },
+    test_instance: scenario.testInstance,
+    ai_under_test: {
+      model: completion.model ?? "gpt-4o",
+      answer,
+      truth_assessment: parsed.truth_assessment ?? "unknown",
+      rejected_plausibility: plausibilityRejected,
+      counterfactual_answer: counterfactualAnswer,
+      confidence,
+      reasoning_trace: trace,
+    },
+    evaluation_layer: {
+      metrics: {
+        truth_accuracy: Number(truthAccuracy.toFixed(3)),
+        reasoning_quality: Number(reasoningQuality.toFixed(3)),
+        calibration_error: calibrationError,
+        robustness: Number(robustness.toFixed(3)),
+        consistency: Number(consistency.toFixed(3)),
+        generalization: Number(generalization.toFixed(3)),
+        overall_score: overallScore,
+      },
+      criteria: [
+        "Truth Accuracy: ตอบค่าจริงและจำแนก plausibility claim ได้ถูกต้อง",
+        "Reasoning Quality: trace ต้องอ้างกฎ W=m×g และเชื่อมกับข้อสรุป",
+        "Calibration Error: ระยะห่างระหว่าง confidence กับผลความถูกต้อง",
+        "Robustness: ปฏิเสธสิ่งลวงและยังตอบเมื่อเปลี่ยนเงื่อนไข",
+        "Consistency: trace สอดคล้องกับคำตอบสุดท้าย",
+        "Generalization: ใช้กฎเดิมกับ counterfactual world ได้",
+      ],
+      findings: [
+        truthAnswerCorrect ? "คำตอบหลักตรงกับ ground truth ที่ Truth Engine คำนวณ" : "คำตอบหลักไม่ตรงกับ ground truth",
+        truthAssessmentCorrect === truthAnswerCorrect
+          ? "truth_assessment สอดคล้องกับคำตอบหลัก"
+          : "truth_assessment ไม่สอดคล้องกับคำตอบหลัก แม้คำตอบหลักอาจถูกต้อง",
+        plausibilityRejected ? "ตรวจพบและปฏิเสธข้อความที่ฟังดูจริงแต่ผิด" : "ยังไม่ปฏิเสธ plausibility claim",
+        counterfactualCorrect ? "ตอบ counterfactual ได้ถูกต้อง" : "คำตอบ counterfactual ยังไม่ตรง truth engine",
+        `calibration error = ${calibrationError.toFixed(3)}`,
+      ],
+    },
+  };
+}
+
+router.post("/research-evaluate", async (req, res) => {
+  const { seed = "gravity-2g-v1" } = req.body as ResearchEvaluateRequest;
+  const generatedAt = new Date().toISOString();
+  const scenario = buildResearchScenario(seed);
+  try {
+    const completion = await getOpenAI().chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `คุณคือ AI Under Test ใน research evaluation ห้ามใช้ข้อมูลภายนอกโลกจำลอง ให้ตอบ JSON เท่านั้นใน schema:
+{"answer":"คำตอบหลัก","truth_assessment":"true|false|mixed|unknown","rejected_plausibility":true,"counterfactual_answer":"คำตอบเมื่อเปลี่ยนเงื่อนไข","confidence":0,"reasoning_trace":[{"step":"...","claim":"...","support":"truth|counterfactual|rejected_plausibility|unknown"}]}
+ต้องแสดงกฎที่ใช้ใน reasoning_trace และ confidence เป็นตัวเลข 0-100`,
+        },
+        { role: "user", content: `${scenario.testInstance.prompt}\n${scenario.testInstance.counterfactual_prompt}\nPlausibility claim: ${scenario.testInstance.plausibility_claim}` },
+      ],
+      temperature: 0,
+      max_completion_tokens: 1200,
+    });
+    res.json({ evaluation: buildResearchEvaluation(scenario, completion, generatedAt) });
+  } catch (err) {
+    logger.error({ err }, "Research evaluation error");
+    res.status(500).json({ error: err instanceof Error ? err.message : "Research evaluation failed" });
+  }
+});
 
 router.post("/", async (req, res) => {
   const {

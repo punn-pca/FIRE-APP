@@ -24,6 +24,7 @@ import MessageBubble, {
   type Message,
   type PCAState,
   type ReportLayers,
+  type ResearchEvaluation,
 } from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
 import PCAProgress from '@/components/PCAProgress';
@@ -62,6 +63,7 @@ export default function ChatScreen() {
   const [tone, setTone] = useState<Tone>('Formal Architect');
   const [deepReasoning, setDeepReasoning] = useState(false);
   const [showToneBar, setShowToneBar] = useState(false);
+  const [isResearchLoading, setIsResearchLoading] = useState(false);
 
   const API_BASE = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
 
@@ -175,6 +177,39 @@ export default function ChatScreen() {
       },
     ]);
   }, []);
+
+  const handleResearchEvaluation = useCallback(async () => {
+    if (isResearchLoading || isLoading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsResearchLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/analyze/research-evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed: `gravity-2g-${Date.now()}` }),
+      });
+      const data = await response.json() as {
+        evaluation?: ResearchEvaluation;
+        error?: string;
+      };
+      if (!response.ok || !data.evaluation) {
+        throw new Error(data.error ?? `เซิร์ฟเวอร์ผิดพลาด: ${response.status}`);
+      }
+      setMessages((prev) => [...prev, {
+        id: genId(),
+        role: 'assistant',
+        content: 'Research Evaluation เสร็จสิ้น — เปิดการ์ดด้านล่างเพื่อดูผลการทดสอบ',
+        researchEvaluation: data.evaluation,
+        timestamp: new Date().toISOString(),
+      }]);
+      setShowToneBar(false);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'ไม่สามารถรัน Research Evaluation ได้';
+      Alert.alert('Research Evaluation ไม่สำเร็จ', errorMessage);
+    } finally {
+      setIsResearchLoading(false);
+    }
+  }, [API_BASE, isLoading, isResearchLoading]);
 
   const handleExportAll = useCallback(async () => {
     const timestamp = formatThaiDateTime();
@@ -302,6 +337,7 @@ export default function ChatScreen() {
           <Pressable
             onPress={() => setDeepReasoning((v) => !v)}
             style={styles.deepRow}
+            disabled={isResearchLoading}
           >
             <View style={[styles.deepToggle, deepReasoning && { backgroundColor: colors.primary }]}>
               <View style={[styles.deepKnob, deepReasoning && { transform: [{ translateX: 18 }] }]} />
@@ -309,6 +345,29 @@ export default function ChatScreen() {
             <Text style={[styles.settingsLabel, { color: colors.foreground }]}>
               Deep Reasoning (วิเคราะห์เชิงลึก)
             </Text>
+          </Pressable>
+          <Pressable
+            onPress={handleResearchEvaluation}
+            style={[
+              styles.researchButton,
+              { borderColor: colors.primary, backgroundColor: colors.primary + '14' },
+              (isResearchLoading || isLoading) && { opacity: 0.55 },
+            ]}
+            disabled={isResearchLoading || isLoading}
+          >
+            <Ionicons
+              name={isResearchLoading ? 'hourglass-outline' : 'flask-outline'}
+              size={16}
+              color={colors.primary}
+            />
+            <View style={styles.researchButtonText}>
+              <Text style={[styles.researchButtonTitle, { color: colors.primary }]}>
+                {isResearchLoading ? 'กำลังสร้างการทดสอบ…' : 'Run Research Evaluation'}
+              </Text>
+              <Text style={[styles.researchButtonHint, { color: colors.mutedForeground }]}>
+                สร้างโลกจำลองและทดสอบ AI Under Test
+              </Text>
+            </View>
           </Pressable>
         </View>
       )}
@@ -413,6 +472,28 @@ function createStyles(
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
+    },
+    researchButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 9,
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingHorizontal: 10,
+      paddingVertical: 9,
+    },
+    researchButtonText: {
+      flex: 1,
+      gap: 2,
+    },
+    researchButtonTitle: {
+      fontSize: 12,
+      fontFamily: 'Inter_600SemiBold',
+      fontWeight: '600' as const,
+    },
+    researchButtonHint: {
+      fontSize: 10,
+      fontFamily: 'Inter_400Regular',
     },
     deepToggle: {
       width: 40,

@@ -353,9 +353,44 @@ export interface UserReport {
   next_step?: string;
 }
 
+export interface AuditAssumption {
+  id: string;
+  statement: string;
+  confidence: number;
+  basis: string;
+}
+
+export interface AuditLimitation {
+  id: string;
+  description: string;
+  impact: string;
+  mitigation: string;
+}
+
+export interface ReasoningTraceStep {
+  id: string;
+  stage: string;
+  purpose: string;
+  inputs: string[];
+  outputs: string[];
+  evidence_ids: string[];
+  assumption_ids: string[];
+  limitation_ids: string[];
+  verification_ids: string[];
+}
+
+export interface VerificationCriterion extends VerificationCheck {
+  id: string;
+  source: 'verification' | 'logical_verification';
+}
+
 export interface AnalystReport {
   evidence_report?: EvidenceReport;
   knowledge_map?: KnowledgeMap;
+  assumptions: AuditAssumption[];
+  reasoning_trace: ReasoningTraceStep[];
+  limitations: AuditLimitation[];
+  verification_criteria: VerificationCriterion[];
   missing_info: string[];
   conflicts: ConflictFinding[];
   confidence_report?: ConfidenceReport;
@@ -380,6 +415,68 @@ export interface SystemTrace {
 export interface ConfidenceSummary {
   score: number;
   band: PCAState['confidence'];
+}
+
+export interface ResearchReasoningStep {
+  step: string;
+  claim: string;
+  support: 'truth' | 'counterfactual' | 'rejected_plausibility' | 'unknown';
+}
+
+export interface ResearchEvaluation {
+  id: string;
+  generated_at: string;
+  modules: {
+    truth_source: { id: string; provenance: string; claims: string[] };
+    world_generator: {
+      id: string;
+      generator: string;
+      parameters: Record<string, number>;
+      rules: string[];
+    };
+    truth_engine: { formula: string; derived_values: Record<string, number> };
+    plausibility_generator: { claim: string; expected_label: 'false' };
+    counterfactual_generator: { condition: string; expected_value: number };
+    explanation_consistency: {
+      trace_supports_answer: boolean;
+      truth_assessment_matches_answer: boolean;
+      score: number;
+    };
+    self_calibration: {
+      declared_confidence: number;
+      empirical_accuracy: number;
+      calibration_error: number;
+    };
+  };
+  test_instance: {
+    id: string;
+    prompt: string;
+    expected_claims: string[];
+    plausibility_claim: string;
+    counterfactual_prompt: string;
+  };
+  ai_under_test: {
+    model: string;
+    answer: string;
+    truth_assessment: 'true' | 'false' | 'mixed' | 'unknown';
+    rejected_plausibility: boolean;
+    counterfactual_answer: string;
+    confidence: number;
+    reasoning_trace: ResearchReasoningStep[];
+  };
+  evaluation_layer: {
+    metrics: {
+      truth_accuracy: number;
+      reasoning_quality: number;
+      calibration_error: number;
+      robustness: number;
+      consistency: number;
+      generalization: number;
+      overall_score: number;
+    };
+    criteria: string[];
+    findings: string[];
+  };
 }
 
 export interface ReportLayers {
@@ -1013,11 +1110,35 @@ function generateSeparatedReportHtml(
         ['แหล่ง', 'เนื้อหา', 'คะแนนรวม'],
         (evidence?.items ?? []).map((item) => [item.source, item.text, item.composite_score.toFixed(3)]),
       )),
+      section('Assumptions — สมมติฐานที่ใช้', reportTable(
+        ['ID', 'สมมติฐาน', 'ความมั่นใจ', 'ฐานที่ใช้'],
+        (analystReport?.assumptions ?? []).map((assumption) => [
+          assumption.id,
+          assumption.statement,
+          assumption.confidence.toFixed(3),
+          assumption.basis,
+        ]),
+      )),
       section('Knowledge Map — ข้อเท็จจริง สมมติฐาน และข้อมูลที่ขาด', [
         `<h3>ข้อเท็จจริง</h3>${reportList(knowledge?.facts ?? [])}`,
         `<h3>สมมติฐาน</h3>${reportList(knowledge?.assumptions ?? [])}`,
         `<h3>ข้อมูลที่ขาด</h3>${reportList(knowledge?.unknowns ?? [])}`,
       ].join('')),
+      section('Reasoning Trace — ร่องรอยการให้เหตุผลแบบสรุป', reportTable(
+        ['ขั้นตอน', 'วัตถุประสงค์', 'ข้อมูลเข้า', 'ผลลัพธ์', 'อ้างอิง'],
+        (analystReport?.reasoning_trace ?? []).map((step) => [
+          step.stage,
+          step.purpose,
+          step.inputs.join(', '),
+          step.outputs.join(', '),
+          [
+            ...step.evidence_ids,
+            ...step.assumption_ids,
+            ...step.limitation_ids,
+            ...step.verification_ids,
+          ].join(', ') || '—',
+        ]),
+      )),
       section('Reasoning — คุณภาพเหตุผล', reportTable(
         ['รายการ', 'ค่า'],
         [
@@ -1027,6 +1148,15 @@ function generateSeparatedReportHtml(
           ['Unsupported claims', String(reasoning?.unsupported_claim_count ?? 0)],
           ['Decision margin', (reasoning?.decision_margin ?? 0).toFixed(3)],
         ],
+      )),
+      section('Limitations — ข้อจำกัดและผลกระทบ', reportTable(
+        ['ID', 'ข้อจำกัด', 'ผลกระทบ', 'วิธีลดความเสี่ยง'],
+        (analystReport?.limitations ?? []).map((limitation) => [
+          limitation.id,
+          limitation.description,
+          limitation.impact,
+          limitation.mitigation,
+        ]),
       )),
       section('Decision — ทางเลือกและข้อแลกเปลี่ยน', pca.intent?.type === 'decision' && pca.decision_matrix
         ? reportTable(
@@ -1038,7 +1168,17 @@ function generateSeparatedReportHtml(
           ]),
         )
         : '<p class="muted">คำถามนี้ไม่ใช่เส้นทางการตัดสินใจ</p>'),
-      section('Verification — การตรวจสอบ', reportTable(
+      section('Verification Criteria — เกณฑ์ตรวจสอบ', reportTable(
+        ['ID', 'แหล่ง', 'เกณฑ์', 'ผ่านหรือไม่', 'หลักฐานผลตรวจ'],
+        (analystReport?.verification_criteria ?? []).map((criterion) => [
+          criterion.id,
+          criterion.source,
+          criterion.criterion,
+          criterion.passed ? `ผ่าน (${criterion.score.toFixed(3)})` : `ไม่ผ่าน (${criterion.score.toFixed(3)})`,
+          criterion.evidence,
+        ]),
+      )),
+      section('Verification Summary — สรุปผลตรวจสอบ', reportTable(
         ['รายการ', 'ผล'],
         [
           ['Verification', `${verification?.status ?? 'ต้องตรวจสอบ'} · ${((verification?.score ?? 0) * 100).toFixed(1)}%`],
@@ -1148,6 +1288,93 @@ export interface Message {
   pcaState?: PCAState;
   timestamp?: string;
   reports?: ReportLayers;
+  researchEvaluation?: ResearchEvaluation;
+}
+
+function ResearchEvaluationCard({
+  evaluation,
+  styles,
+}: {
+  evaluation: ResearchEvaluation;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const metrics = evaluation.evaluation_layer.metrics;
+  const metricRows: Array<[string, number, boolean]> = [
+    ['Truth Accuracy', metrics.truth_accuracy, false],
+    ['Reasoning Quality', metrics.reasoning_quality, false],
+    ['Calibration Error', metrics.calibration_error, true],
+    ['Robustness', metrics.robustness, false],
+    ['Consistency', metrics.consistency, false],
+    ['Generalization', metrics.generalization, false],
+  ];
+  return (
+    <View style={styles.researchCard}>
+      <View style={styles.researchHeader}>
+        <View style={styles.researchHeaderText}>
+          <Text style={styles.researchTitle}>🧪 Research Evaluation</Text>
+          <Text style={styles.researchSubtitle}>โลกจำลอง · Ground Truth · Adversarial Test</Text>
+        </View>
+        <Text style={styles.researchOverall}>{(metrics.overall_score * 100).toFixed(1)}/100</Text>
+      </View>
+      <Text style={styles.researchLabel}>Evaluation Layer</Text>
+      <View style={styles.researchMetricGrid}>
+        {metricRows.map(([label, value, inverse]) => (
+          <View key={label} style={styles.researchMetricTile}>
+            <Text style={styles.researchMetricValue}>{(value * 100).toFixed(1)}%</Text>
+            <Text style={styles.researchMetricLabel}>
+              {label}{inverse ? ' (ยิ่งต่ำยิ่งดี)' : ''}
+            </Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Truth Source / World Generator</Text>
+        <Text style={styles.researchBody}>{evaluation.modules.truth_source.provenance}</Text>
+        <Text style={styles.researchBody}>Rule: {evaluation.modules.truth_engine.formula}</Text>
+        {evaluation.modules.truth_source.claims.map((claim) => (
+          <Text key={claim} style={styles.researchBody}>• {claim}</Text>
+        ))}
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Plausibility Generator</Text>
+        <Text style={styles.researchBody}>{evaluation.modules.plausibility_generator.claim}</Text>
+        <Text style={styles.researchBody}>
+          ผลตรวจ: {evaluation.ai_under_test.rejected_plausibility ? '✓ ปฏิเสธข้อความลวง' : '✗ ยังไม่ปฏิเสธข้อความลวง'}
+        </Text>
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Counterfactual Engine</Text>
+        <Text style={styles.researchBody}>{evaluation.modules.counterfactual_generator.condition}</Text>
+        <Text style={styles.researchBody}>
+          Expected: {evaluation.modules.counterfactual_generator.expected_value} N
+          {' · '}Answer: {evaluation.ai_under_test.counterfactual_answer || 'ไม่พบคำตอบ'}
+        </Text>
+      </View>
+      <View style={styles.researchSection}>
+        <Text style={styles.researchLabel}>Explanation Consistency</Text>
+        {evaluation.ai_under_test.reasoning_trace.slice(0, 5).map((step) => (
+          <Text key={`${step.step}-${step.claim}`} style={styles.researchBody}>
+            • {step.step}: {step.claim} [{step.support}]
+          </Text>
+        ))}
+        <Text style={styles.researchBody}>
+          Trace alignment: {evaluation.modules.explanation_consistency.trace_supports_answer ? '✓' : '✗'}
+          {' · '}Self-label alignment: {evaluation.modules.explanation_consistency.truth_assessment_matches_answer ? '✓' : '✗'}
+          {' · '}Score: {(evaluation.modules.explanation_consistency.score * 100).toFixed(1)}%
+        </Text>
+        <Text style={styles.researchBody}>
+          Declared confidence: {evaluation.ai_under_test.confidence}/100
+          {' · '}Empirical accuracy: {(evaluation.modules.self_calibration.empirical_accuracy * 100).toFixed(1)}%
+          {' · '}Calibration error: {evaluation.modules.self_calibration.calibration_error.toFixed(3)}
+        </Text>
+      </View>
+      <View style={styles.researchFindings}>
+        {evaluation.evaluation_layer.findings.map((finding) => (
+          <Text key={finding} style={styles.researchBody}>• {finding}</Text>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 interface ParsedSection {
@@ -1324,6 +1551,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const [reportTab, setReportTab] = useState<'user' | 'analyst' | 'system'>('user');
   const [exportReportKind, setExportReportKind] = useState<Exclude<ReportKind, 'all'>>('user');
   const reports = message.reports;
+  const analystAssumptions = reports?.analyst_report.assumptions ?? [];
+  const analystReasoningTrace = reports?.analyst_report.reasoning_trace ?? [];
+  const analystLimitations = reports?.analyst_report.limitations ?? [];
+  const analystVerificationCriteria = reports?.analyst_report.verification_criteria ?? [];
   const reportConfidence = reports?.confidence_summary ?? (
     message.pcaState?.confidence_report
       ? {
@@ -1695,6 +1926,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             <Text style={styles.aiText}>{message.content}</Text>
           )}
 
+          {message.researchEvaluation && (
+            <ResearchEvaluationCard evaluation={message.researchEvaluation} styles={styles} />
+          )}
+
           {message.pcaState && reports && renderExportControls()}
 
           {/* PCA Meta (collapsible) */}
@@ -1800,7 +2035,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                       <Text style={styles.reportMetricLabel}>ข้อเท็จจริง</Text>
                     </View>
                     <View style={styles.reportMetricTile}>
-                      <Text style={styles.reportMetricNumber}>{reports.analyst_report.knowledge_map?.assumptions.length ?? 0}</Text>
+                        <Text style={styles.reportMetricNumber}>{analystAssumptions.length || reports.analyst_report.knowledge_map?.assumptions.length || 0}</Text>
                       <Text style={styles.reportMetricLabel}>สมมติฐาน</Text>
                     </View>
                     <View style={styles.reportMetricTile}>
@@ -1815,9 +2050,80 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                         aggregate {reports.analyst_report.evidence_report.aggregate_score.toFixed(3)}
                         {' · '}coverage {reports.analyst_report.evidence_report.coverage_score.toFixed(3)}
                       </Text>
+                      {reports.analyst_report.evidence_report.items.slice(0, 5).map((item) => (
+                        <View key={item.id} style={styles.evidenceItemRow}>
+                          <Text style={styles.reportCalloutTitle}>
+                            {item.id} · {item.source} · {item.composite_score.toFixed(3)}
+                          </Text>
+                          <Text style={styles.reportBodyText} numberOfLines={3}>{item.text}</Text>
+                          <Text style={styles.reportSectionHint}>
+                            relevance {item.relevance_score.toFixed(3)} · quality {item.quality_score.toFixed(3)} · consistency {item.consistency_score.toFixed(3)}
+                          </Text>
+                        </View>
+                      ))}
                     </View>
                   )}
-                  <Text style={styles.reportGroupTitle}>2. Reasoning</Text>
+                  <Text style={styles.reportGroupTitle}>2. Assumptions</Text>
+                  {analystAssumptions.length > 0 ? (
+                    analystAssumptions.map((assumption) => (
+                      <View key={assumption.id} style={styles.reportCallout}>
+                        <Text style={styles.reportCalloutTitle}>
+                          {assumption.id} · confidence {assumption.confidence.toFixed(3)}
+                        </Text>
+                        <Text style={styles.reportBodyText}>{assumption.statement}</Text>
+                        <Text style={styles.reportSectionHint}>{assumption.basis}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.reportBodyText}>ไม่พบสมมติฐานที่ถูกบันทึก</Text>
+                  )}
+                  <Text style={styles.reportGroupTitle}>3. Reasoning Trace</Text>
+                  {analystReasoningTrace.map((step) => (
+                    <View key={step.id} style={styles.reasoningTraceRow}>
+                      <View style={styles.reasoningTraceHeader}>
+                        <Text style={styles.reportCalloutTitle}>{step.stage}</Text>
+                        <Text style={styles.reasoningTraceId}>{step.id}</Text>
+                      </View>
+                      <Text style={styles.reportBodyText}>{step.purpose}</Text>
+                      <Text style={styles.reportSectionHint}>
+                        Input: {step.inputs.join(', ') || '—'} · Output: {step.outputs.join(', ') || '—'}
+                      </Text>
+                      <Text style={styles.reportSectionHint}>
+                        อ้างอิง: {[
+                          ...step.evidence_ids,
+                          ...step.assumption_ids,
+                          ...step.limitation_ids,
+                          ...step.verification_ids,
+                        ].join(', ') || 'ไม่มี'}
+                      </Text>
+                    </View>
+                  ))}
+                  <Text style={styles.reportGroupTitle}>4. Limitations</Text>
+                  {analystLimitations.length > 0 ? (
+                    analystLimitations.map((limitation) => (
+                      <View key={limitation.id} style={styles.reportCallout}>
+                        <Text style={styles.reportCalloutTitle}>{limitation.id}</Text>
+                        <Text style={styles.reportBodyText}>{limitation.description}</Text>
+                        <Text style={styles.reportSectionHint}>ผลกระทบ: {limitation.impact}</Text>
+                        <Text style={styles.reportSectionHint}>ลดความเสี่ยง: {limitation.mitigation}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.reportBodyText}>ไม่พบข้อจำกัดเพิ่มเติม</Text>
+                  )}
+                  <Text style={styles.reportGroupTitle}>5. Verification Criteria</Text>
+                  {analystVerificationCriteria.map((criterion) => (
+                    <View key={criterion.id} style={styles.verificationCriterionRow}>
+                      <Text style={styles.reportCalloutTitle}>
+                        {criterion.passed ? '✓' : '✗'} {criterion.id} · {criterion.source}
+                      </Text>
+                      <Text style={styles.reportBodyText}>{criterion.criterion}</Text>
+                      <Text style={styles.reportSectionHint}>
+                        {criterion.evidence} · score {criterion.score.toFixed(3)}
+                      </Text>
+                    </View>
+                  ))}
+                  <Text style={styles.reportGroupTitle}>6. Reasoning Quality</Text>
                   {reports.analyst_report.reasoning_quality && (
                     <View style={styles.reportCallout}>
                       <Text style={styles.reportCalloutTitle}>Reasoning Quality</Text>
@@ -2641,6 +2947,126 @@ function createStyles(colors: ReturnType<typeof useColors>) {
     reportCallout: {
       backgroundColor: colors.card,
       borderRadius: 7,
+      padding: 8,
+      gap: 3,
+    },
+    researchCard: {
+      marginTop: 10,
+      backgroundColor: colors.primary + '10',
+      borderColor: colors.primary + '55',
+      borderWidth: 1,
+      borderRadius: 10,
+      padding: 10,
+      gap: 7,
+    },
+    researchHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: 8,
+    },
+    researchHeaderText: {
+      flex: 1,
+      gap: 2,
+    },
+    researchTitle: {
+      color: colors.foreground,
+      fontSize: 12,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    researchSubtitle: {
+      color: colors.mutedForeground,
+      fontSize: 9,
+      fontFamily: 'Inter_400Regular',
+    },
+    researchOverall: {
+      color: colors.primary,
+      fontSize: 14,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    researchMetricGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 5,
+    },
+    researchMetricTile: {
+      width: '31.8%',
+      minWidth: 82,
+      backgroundColor: colors.card,
+      borderRadius: 7,
+      padding: 6,
+      gap: 2,
+    },
+    researchMetricValue: {
+      color: colors.primary,
+      fontSize: 12,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    researchMetricLabel: {
+      color: colors.mutedForeground,
+      fontSize: 8,
+      lineHeight: 11,
+      fontFamily: 'Inter_400Regular',
+    },
+    researchSection: {
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 6,
+      gap: 2,
+    },
+    researchLabel: {
+      color: colors.foreground,
+      fontSize: 10,
+      fontFamily: 'Inter_700Bold',
+      fontWeight: '700' as const,
+    },
+    researchBody: {
+      color: colors.mutedForeground,
+      fontSize: 9,
+      lineHeight: 14,
+      fontFamily: 'Inter_400Regular',
+    },
+    researchFindings: {
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 6,
+      gap: 2,
+    },
+    evidenceItemRow: {
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 6,
+      marginTop: 3,
+      gap: 2,
+    },
+    reasoningTraceRow: {
+      backgroundColor: colors.card,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.primary,
+      borderRadius: 7,
+      padding: 8,
+      gap: 3,
+    },
+    reasoningTraceHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 6,
+    },
+    reasoningTraceId: {
+      color: colors.mutedForeground,
+      fontSize: 9,
+      fontFamily: 'Inter_500Medium',
+      flexShrink: 1,
+    },
+    verificationCriterionRow: {
+      backgroundColor: colors.card,
+      borderRadius: 7,
+      borderWidth: 1,
+      borderColor: colors.border,
       padding: 8,
       gap: 3,
     },
