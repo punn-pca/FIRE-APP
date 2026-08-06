@@ -44,3 +44,9 @@ HTML/PDF exports must preserve the report-layer boundary as three independently 
 **Why:** A single combined document hid the intended audience and made it unclear which report a user was sharing.
 
 **How to apply:** Keep the combined report as an optional legacy path, but expose explicit report-type selection and include the selected type in the filename and document title.
+
+Export actions must be rendered beside the user-facing answer whenever report layers exist; they must not live only inside the collapsible PCA panel.
+
+**Why:** The API returns `reports` for normal successful answers, so a condition that renders export controls only when reports are absent hides the controls in the common path.
+
+**How to apply:** Keep report inspection collapsible, but place HTML/PDF actions and the three report-type selector in the visible answer footer. On web, HTML downloads directly and PDF opens the selected report in the browser print flow for “Save as PDF”; native uses Expo Print and Sharing.

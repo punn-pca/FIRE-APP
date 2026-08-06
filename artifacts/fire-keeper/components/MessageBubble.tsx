@@ -1298,6 +1298,23 @@ function downloadTextFile(content: string, filename: string, mimeType: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function openHtmlForPrint(html: string, title: string) {
+  if (typeof window === 'undefined') {
+    throw new Error('ไม่พบระบบพิมพ์ของเว็บ');
+  }
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    throw new Error('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาต pop-up แล้วลองใหม่');
+  }
+  printWindow.document.open();
+  printWindow.document.write(
+    html.replace(/<title>[^<]*<\/title>/i, `<title>${title}</title>`),
+  );
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.onload = () => printWindow.print();
+}
+
 export default function MessageBubble({ message }: MessageBubbleProps) {
   const colors = useColors();
   const styles = createStyles(colors);
@@ -1377,7 +1394,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
     try {
       if (Platform.OS === 'web') {
-        await Print.printAsync({ html });
+        openHtmlForPrint(html, `FIRE KEEPER — ${REPORT_KIND_LABELS[exportReportKind]}`);
         return;
       }
 
@@ -1597,6 +1614,61 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             <Text style={styles.aiText}>{message.content}</Text>
           )}
 
+          {message.pcaState && reports && (
+            <View style={styles.reportExportPanel}>
+              <Text style={styles.exportHeading}>แชร์ / บันทึกรายงาน</Text>
+              <Text style={styles.exportHint}>
+                เลือกประเภทรายงาน แล้วดาวน์โหลด HTML หรือเลือก Save as PDF
+              </Text>
+              <View style={styles.exportTypeRow}>
+                {([
+                  ['user', '👤 User Report'],
+                  ['analyst', '🔎 Analyst Report'],
+                  ['system', '🛠 System Trace'],
+                ] as const).map(([kind, label]) => (
+                  <Pressable
+                    key={`answer-export-${kind}`}
+                    onPress={() => setExportReportKind(kind)}
+                    style={[
+                      styles.exportTypeBtn,
+                      exportReportKind === kind && styles.exportTypeBtnActive,
+                    ]}
+                  >
+                    <Text style={[
+                      styles.exportTypeLabel,
+                      exportReportKind === kind && styles.exportTypeLabelActive,
+                    ]}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.exportSelected}>
+                รายงานที่เลือก: {REPORT_KIND_LABELS[exportReportKind]}
+              </Text>
+              <View style={styles.exportRow}>
+                <Pressable
+                  onPress={handleExportHtml}
+                  style={({ pressed }) => [styles.exportHtmlBtn, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`ดาวน์โหลด HTML — ${REPORT_KIND_LABELS[exportReportKind]}`}
+                >
+                  <Ionicons name="logo-html5" size={13} color="#f97316" />
+                  <Text style={styles.exportHtmlLabel}>ดาวน์โหลด HTML</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleExportPdf}
+                  style={({ pressed }) => [styles.exportPdfBtn, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`เปิดตัวเลือกบันทึก PDF — ${REPORT_KIND_LABELS[exportReportKind]}`}
+                >
+                  <Ionicons name="document-text-outline" size={13} color="#dc2626" />
+                  <Text style={styles.exportPdfLabel}>บันทึก PDF</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
           {/* PCA Meta (collapsible) */}
           {message.pcaState && (
             <Pressable onPress={() => setShowPCA(!showPCA)} style={styles.pcaToggle}>
@@ -1808,6 +1880,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   ))}
                 </View>
               )}
+
             </View>
           )}
           {showPCA && message.pcaState && !reports && (
@@ -2451,6 +2524,13 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontSize: 10,
       fontFamily: 'Inter_400Regular',
       marginBottom: 3,
+    },
+    reportExportPanel: {
+      marginTop: 12,
+      paddingTop: 10,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      gap: 5,
     },
     executiveSummary: {
       backgroundColor: colors.primary + '18',
